@@ -171,17 +171,22 @@ function barg::param_set {
       local long="--${BASH_REMATCH[3]}"
       local value="${BASH_REMATCH[5]:-${BASH_REMATCH[7]}}"
 
-      if barg::is_in_arr "${short}" "${!argv_table[@]}"; then
+      if barg::is_in_arr "${short}" "${!BARG_ARGV_TABLE[@]}"; then
         declare -g "${set_var_name}=${value}"
-        barg::clean_fields $((${argv_table["${short}"]} - 1))
-        unset "argv_table[${short}]"
-      elif barg::is_in_arr "${long}" "${!argv_table[@]}"; then
+        barg::clean_fields $((${BARG_ARGV_TABLE["${short}"]} - 1))
+        unset "BARG_ARGV_TABLE[${short}]"
+      elif barg::is_in_arr "${long}" "${!BARG_ARGV_TABLE[@]}"; then
         declare -g "${set_var_name}=${value}"
-        barg::clean_fields $((${argv_table["${long}"]} - 1))
-        unset "argv_table[${long}]"
+        barg::clean_fields $((${BARG_ARGV_TABLE["${long}"]} - 1))
+        unset "BARG_ARGV_TABLE[${long}]"
+      else
+        STR="${STR/#"${BASH_REMATCH[0]}"/}"
+        continue
       fi
 
-      STR="${STR/#"${BASH_REMATCH[0]}"/}"
+      # already set + not needed to continue
+      BARG_ARGV_TABLE["${set_var_name}"]="!"
+      return
     done
     ${is_required} && return 1
     declare -g "${set_var_name}=${def_value:-0}"
@@ -218,9 +223,9 @@ function barg::param_set {
 
   # Check if it was found in command line and set its
   # form for the key of the args table, otherwise set default
-  if [ -n "${argv_table["${__short__}"]}" ]; then
+  if [ -n "${BARG_ARGV_TABLE["${__short__}"]}" ]; then
     local the_found_flag="${__short__}"
-  elif [ -n "${argv_table["${__long__}"]}" ]; then
+  elif [ -n "${BARG_ARGV_TABLE["${__long__}"]}" ]; then
     local the_found_flag="${__long__}"
   else
     ${is_required} && barg::exit_msg "Missing required arguments" "${signat} is a required argument"
@@ -237,8 +242,11 @@ function barg::param_set {
     return 0
   fi
 
+  # it's supposed to not be found to set default value here
+  BARG_ARGV_TABLE["${set_var_name}"]="!"
+
   # take last value as valid
-  local current_value_index="${argv_table[${the_found_flag}]##*\ }"
+  local current_value_index="${BARG_ARGV_TABLE[${the_found_flag}]##*\ }"
 
   if ! ${is_vec_list}; then
     local value="${argv[current_value_index]}"
@@ -266,7 +274,7 @@ function barg::param_set {
     esac
   else
     local _current_indexes=()
-    IFS=' ' read -ra _current_indexes_ <<< "${argv_table["${__short__}"]} ${argv_table["${__long__}"]}"
+    IFS=' ' read -ra _current_indexes_ <<< "${BARG_ARGV_TABLE["${__short__}"]} ${BARG_ARGV_TABLE["${__long__}"]}"
     for index in "${_current_indexes[@]}" "${_current_indexes_[@]}"; do
       local value="${argv[index]}"
       [ -z "${value}" ] && continue
@@ -284,6 +292,7 @@ function barg::param_set {
     done
     unset "_current_indexes"
   fi
+  unset "BARG_ARGV_TABLE[${__short__}]" "BARG_ARGV_TABLE[${__long__}]"
 
   ! barg::var_exists "${set_var_name}" && ${is_required} && barg::exit_msg "Missing required arguments" "${signat} is a required argument"
 
@@ -667,8 +676,8 @@ function barg::parse {
   local argv=("${@}")
   barg::normalize_args # Normalize joint arguments, from '-abc' to '-a -b -c'
   declare -ag BARG_EXTRAS_BEFORE=("${argv[@]}")
+  declare -Ag BARG_ARGV_TABLE
 
-  declare -A argv_table
   local i=0
   local _flag=0
   while ((i < ${#argv[@]})); do
@@ -684,9 +693,9 @@ function barg::parse {
     _flag="${argv[i]}"
     ((i++))
 
-    [ -z "${argv_table["${_flag}"]}" ] \
-      && argv_table["${_flag}"]="${i}" \
-      || argv_table["${_flag}"]+=" ${i}"
+    [ -z "${BARG_ARGV_TABLE["${_flag}"]}" ] \
+      && BARG_ARGV_TABLE["${_flag}"]="${i}" \
+      || BARG_ARGV_TABLE["${_flag}"]+=" ${i}"
   done
 
   local clhil="${__barg_palette[hil]}"
