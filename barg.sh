@@ -19,19 +19,19 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 fi
 
 declare -Ag __barg_opts=(
-  [prognam]="${0##*/}" # Program name to use in error messages (default is `basename ${0}`)
-  [palette]=''         # Error message color (default: )
-  [summary]=''         # Program description (default: empty)
-  [onerrcb]=''         # Name for the function to run on error (default: empty)
-  [extargs]=''         # Collect positional parameters (default: empty)
-  [epilogs]=''         # Epilog array name, escape codes will be intepreted (default: empty)
-  [display]=true       # Print output to the console (default: true)
-  [toerror]=true       # Redirect output to standard error (default: true)
-  [helpmsg]=false      # Generate help message (default: false)
-  [showdef]=false      # Show default values in help message (default: false)
-  [reqargs]=false      # Treat positional arguments as required (default: false)
-  [reqcmds]=false      # Require a subcommand to be specified (default: false)
-  [checkvl]=false      # Allow required values to be zero-length (default: false)
+  [argv_zero]="${0##*/}"      # Program name (from $0)
+  [summary]=''                # Short tool description
+  [color_palette]=''          # Error message color profile
+  [on_error]=''               # Function to call on failure
+  [epilog_lines]=''           # Array name for footer/examples
+  [spare_args_var]=''         # Variable name to store leftovers
+  [spare_args_required]=false # Require trailing positional arguments
+  [subcommand_required]=false # Require the second-level command
+  [allow_empty_values]=false  # Allow "" for required parameters
+  [show_defaults]=false       # Show default values in help
+  [help_enabled]=false        # Enable help message generation
+  [quiet_exit]=false          # Suppress console output
+  [use_stderr]=true           # Use stderr for output/errors
 )
 declare -Ag __barg_palette=(
   [acc]='\x1b[38;5;12m'  # Blue
@@ -44,7 +44,7 @@ declare -Ag __barg_palette=(
   [dsv]='\x1b[38;5;85m'  # Light green
   [dov]='\x1b[38;5;230m' # Very light yellow
 )
-declare -Ag __barg_commands=()
+declare -Ag __barg_subcommands=()
 
 function barg::unload {
   unset -f \
@@ -58,7 +58,7 @@ function barg::unload {
     barg::unload \
     barg::exit_msg
 
-  unset -v __barg_opts __barg_palette __barg_commands
+  unset -v __barg_opts __barg_palette __barg_subcommands
 }
 
 function barg::var_exists {
@@ -111,10 +111,9 @@ function barg::normalize_args {
 
 function barg::clean_fields {
   for index in "${@}"; do
-    if ((index >= 0 && index < ${#BARG_EXTRAS_BEFORE[@]})); then
-      # shellcheck disable=SC2323
-      [ "${BARG_EXTRAS_BEFORE[index]}" == '--' ] && BARG_EXTRAS_BEFORE[(index + 1)]=""
-      BARG_EXTRAS_BEFORE[index]=""
+    if ((index >= 0 && index < ${#argv[@]})); then
+      [ "${argv[index]}" == '--' ] && BARG_TAKEN_ARGS+=("$((index + 1))")
+      BARG_TAKEN_ARGS+=("${index}")
     fi
   done
 }
@@ -296,7 +295,7 @@ function barg::param_set {
 
   ! barg::var_exists "${set_var_name}" && ${is_required} && barg::exit_msg "Missing required arguments" "${signat} is a required argument"
 
-  [ "${__barg_opts[checkvl]}" != 'true' ] \
+  [ "${__barg_opts[allow_empty_values]}" != 'true' ] \
     && ${is_required} \
     && [ -z "${!set_var_name}" ] \
     && barg::exit_msg "Missing required arguments" "${signat} has an empty value"
@@ -314,19 +313,19 @@ function barg::exit_msg {
   local error_type="${1}"
   local error_desc="${2}"
 
-  local onerrcb="${__barg_opts[onerrcb]}"
+  local onerrcb="${__barg_opts[on_error]}"
   if [ -n "${onerrcb}" ]; then
     "${onerrcb}" "${error_type}" "${error_desc}" && return || exit ${?}
   fi
 
   local ecolor="${__barg_palette[err]}"
-  local toerror="${__barg_opts[toerror]}"
-  local display="${__barg_opts[display]}"
-  local prognam="${__barg_opts[prognam]}"
+  local toerror="${__barg_opts[use_stderr]}"
+  local be_quiet="${__barg_opts[quiet_exit]}"
+  local prognam="${__barg_opts[argv_zero]}"
 
   local __err__="${ecolor}ERROR: ${prognam} -> ${error_type}...\x1b[00m ${error_desc}"
 
-  if [ "${display}" == 'true' ]; then
+  if [ "${be_quiet}" != 'true' ]; then
     [ "${toerror}" == 'true' ] && printf '%b\n' "${__err__}" >&2 \
       || printf '%b\n' "${__err__}"
   fi
@@ -349,25 +348,25 @@ function barg::gen_help_message {
   local cldsv="${__barg_palette[dsv]}"
   local cldov="${__barg_palette[dov]}"
 
-  local prognam="${__barg_opts[prognam]}"
-  local subcmds=("${!__barg_commands[@]}")
+  local prognam="${__barg_opts[argv_zero]}"
+  local __all_subcommands=("${!__barg_subcommands[@]}")
   local scmd_str=""
-  [[ "${#subcmds[@]}" -gt 0 ]] && {
+  [[ "${#__all_subcommands[@]}" -gt 0 ]] && {
     [[ -n "${BARG_SUBCOMMAND}" ]] && scmd_str=" ${BARG_SUBCOMMAND}" || scmd_str=" COMMAND"
   }
-  [[ "${__barg_opts[reqargs]}" == true ]] && local __dummy_bool_extras="-"
+  [[ "${__barg_opts[spare_args_required]}" == true ]] && local __dummy_bool_extras="-"
   if [ -n "${BARG_SUBCOMMAND}" ]; then
-    local desc="${__barg_commands["${BARG_SUBCOMMAND}"]:-${__barg_commands["*${BARG_SUBCOMMAND}"]}}"
+    local desc="${__barg_subcommands["${BARG_SUBCOMMAND}"]:-${__barg_subcommands["*${BARG_SUBCOMMAND}"]}}"
     printf '\x1b[1m%b%s\x1b[0m%s\n\n' "${clacc}" "${prognam}" " ${BARG_SUBCOMMAND}${desc:+: ${desc}}"
   elif [ -n "${__barg_opts[summary]}" ]; then
     printf '\x1b[1m%b%s\x1b[0m: %s\n\n' "${clacc}" "${prognam}" "${__barg_opts[summary]}"
   fi
   printf '%bUsage\x1b[0m:\n %b%s\x1b[0m%s [OPTIONS]%s\n\n' "${clacc}" "${clcmd}" "${prognam,,}" "${scmd_str}" "${__dummy_bool_extras:+ [...]}"
 
-  if [ -z "${BARG_SUBCOMMAND}" ] && [[ "${#subcmds[@]}" -gt 0 ]]; then
+  if [ -z "${BARG_SUBCOMMAND}" ] && [[ "${#__all_subcommands[@]}" -gt 0 ]]; then
     printf "%bAvailable subcommands:\x1b[0m\n" "${clacc}"
-    for sub in "${subcmds[@]}"; do
-      printf "  %-16s %s\n" "${sub#\*}" "${__barg_commands["${sub}"]}"
+    for sub in "${__all_subcommands[@]}"; do
+      printf "  %-16s %s\n" "${sub#\*}" "${__barg_subcommands["${sub}"]}"
     done
     printf '\n'
   fi
@@ -390,7 +389,7 @@ function barg::gen_help_message {
       fi
     fi
 
-    if [[ "${__barg_opts[showdef]}" == 'true' && "${type}" != "switch" && -n "${__defaults[i]}" ]]; then
+    if [[ "${__barg_opts[show_defaults]}" == 'true' && "${type}" != "switch" && -n "${__defaults[i]}" ]]; then
       local default_str="${__defaults[i]}"
       if [[ "${type}" == "str" ]]; then
         # For strings, limit to 45 chars and add  if needed
@@ -448,9 +447,9 @@ function barg::gen_help_message {
   is_req=""
   is_vec=""
   __print_flag_line
-  [[ -z "${__barg_opts[epilogs]}" || -n "${BARG_SUBCOMMAND}" ]] && return
+  [[ -z "${__barg_opts[epilog_lines]}" || -n "${BARG_SUBCOMMAND}" ]] && return
 
-  declare -n epilogs="${__barg_opts[epilogs]}"
+  declare -n epilogs="${__barg_opts[epilog_lines]}"
   printf '\n'
   printf '%b\n' "${epilogs[@]//\{acc\}/${clacc}}"
 }
@@ -461,18 +460,18 @@ function barg::gen_help_message {
 #   barg::parse "<command_line>" <<< "${definitions}"
 # Example:
 # This will have 2 subcommands, and will require
-# positional arguments for `echo`
+# spare arguments for `echo`
 # will have flags (true/false)
 # For `tell` will have required (note the `!`) parameters
 # ```bash
 #   barg::parse "${@}" <<EOF
 #     #[always]
 #     meta {
-#       prognam: 'Example'
-#       reqcmds: 'true'
-#       reqargs: 'true'
-#       helpmsg: 'true'
-#       extargs: 'THIS_POSITIONAL_ARGS'
+#       argv_zero: 'Example'
+#       subcommand_required: 'true'
+#       spare_args_required: 'true'
+#       help_enabled: 'true'
+#       spare_args_var: 'THIS_POSITIONAL_ARGS'
 #     }
 #
 #     commands {
@@ -490,7 +489,11 @@ function barg::gen_help_message {
 function barg::parse {
   [ -p /dev/stdin ] || return 1
   read -rt 0.1 __line_0
-  [[ "${__line_0}" != '#[always]' && "${#}" -eq 0 ]] && return 1
+  if [[ "${__line_0}" == '#[always]' ]]; then
+    __line_0=''
+  else
+    ((${#} == 0)) && return 1
+  fi
 
   # shellcheck disable=SC1003
   local __val_regex__='("((\\"|[^"])*?)"|'\''((\\'\''|[^'\''])*?)'\''|(-?[0-9]+|true|false))'
@@ -500,8 +503,8 @@ function barg::parse {
   local __num_regex__='^((-?[0-9]{1,3}(_[0-9]{3})*|-?[0-9]*)|(-?[0-9]{1,3}(_[0-9]{3})+\.([0-9]{3}(_[0-9]{1,3})*|[0-9]{1,3})|-?[0-9]+\.[0-9]+))$'
   local __int_regex__='^(-?[0-9]{1,3}(_[0-9]{3})*|-?[0-9]*)$'
   local __flt_regex__='^(-?[0-9]{1,3}(_[0-9]{3})+\.([0-9]{3}(_[0-9]{1,3})*|[0-9]{1,3})|-?[0-9]+\.[0-9]+)$'
-  local __opt_regex__="meta \{((\s*([\*A-Za-z][A-Za-z0-9]+)\s*:\s*${__val_regex__}\s*)+)\}"
-  local __obi_regex__="\s*([\*A-Za-z][A-Za-z0-9]+)\s*:\s*${__val_regex__}\s*"
+  local __opt_regex__="meta \{((\s*([\*A-Za-z_-][A-Za-z0-9_-]+)\s*:\s*${__val_regex__}\s*)+)\}"
+  local __obi_regex__="\s*([\*A-Za-z_-][A-Za-z0-9_-]+)\s*:\s*${__val_regex__}\s*"
   local __obj_regex__="\s*(([A-Za-z!?@#_.:<>]?)/?([A-Za-z0-9!?@#_.:<>\-]+)\s*:\s*${__val_regex__})\s*"
   local __lst_regex__="\s*${__val_regex__}\s*"
   local __def_regex__=(
@@ -552,14 +555,14 @@ function barg::parse {
     while [[ ${obj} =~ ${__obi_regex__} ]]; do
       local key="${BASH_REMATCH[1]}"
       local val="${BASH_REMATCH[3]:-${BASH_REMATCH[5]}}"
-      __barg_commands[${key}]="${val}"
+      __barg_subcommands[${key}]="${val}"
       obj="${obj/#"${BASH_REMATCH[0]//\\/\\\\}"/}"
     done
     unset key val obj
   fi
 
-  [ -n "${__barg_opts[palette]}" ] && {
-    mapfile -t palette <<< "${__barg_opts[palette]//:/$'\n'}"
+  [ -n "${__barg_opts[color_palette]}" ] && {
+    mapfile -t palette <<< "${__barg_opts[color_palette]//:/$'\n'}"
     __barg_palette[acc]="\x1b[${palette[0]:-0}m"
     __barg_palette[err]="\x1b[${palette[1]:-0}m"
     __barg_palette[hil]="\x1b[${palette[2]:-0}m"
@@ -573,33 +576,37 @@ function barg::parse {
   }
 
   declare -g BARG_SUBCOMMAND=""
-  local BARG_SUBCOMMAND_NEEDS_EXTRAS=false
+  local BARG_SUBCOMMAND_NEEDS_SPARE=false
   # Try to get the possible sub command
   if [ "${1}" == '--' ]; then
     shift 1
-  elif [ -n "${__barg_commands[*]}" ]; then
+  elif [ -n "${__barg_subcommands[*]}" ]; then
     # shellcheck disable=SC2206
-    local subcmds=("${!__barg_commands[@]}")
-    if barg::is_in_arr "${1}" "${subcmds[@]/#\*/}"; then
+    local __all_subcommands=("${!__barg_subcommands[@]}")
+    if barg::is_in_arr "${1}" "${__all_subcommands[@]/#\*/}"; then
       # check if it does not need extras
-      [[ " ${subcmds[*]} " == *" *${1} "* ]] && {
-        BARG_SUBCOMMAND_NEEDS_EXTRAS=true
+      [[ " ${__all_subcommands[*]} " == *" *${1} "* ]] && {
+        BARG_SUBCOMMAND_NEEDS_SPARE=true
       }
       BARG_SUBCOMMAND="${1}"
       shift 1
     fi
   fi
   local __missing_subcmd=false
-  if [ "${__barg_opts[reqcmds]}" == "true" ] && [ -n "${__barg_commands[*]}" ] && [ -z "${BARG_SUBCOMMAND}" ]; then
+  if [ "${__barg_opts[subcommand_required]}" == "true" ] && [ -n "${__barg_subcommands[*]}" ] && [ -z "${BARG_SUBCOMMAND}" ]; then
     __missing_subcmd=true
   fi
 
+  local argv=("${@}")
+  barg::normalize_args # Normalize joint arguments, from '-abc' to '-a -b -c'
+
   local will_generate_help=false
-  if [ "${__barg_opts[helpmsg]}" == 'true' ]; then
+  if [ "${__barg_opts[help_enabled]}" == 'true' ]; then
     local i=0
-    while ((i <= ${#})); do
-      if [[ "${!i}" == '--' ]]; then ((i++))
-      elif [[ "${!i}" == '-h' || "${!i}" == '--help' ]]; then
+    while ((i <= ${#argv[@]})); do
+      if [[ "${argv[i]}" == '--' ]]; then
+        ((i++))
+      elif [[ "${argv[i]}" == '-h' || "${argv[i]}" == '--help' ]]; then
         will_generate_help=true
         break
       fi
@@ -609,9 +616,9 @@ function barg::parse {
 
   if ! ${will_generate_help} && ${__missing_subcmd}; then
     # shellcheck disable=SC2206
-    local subcmds=("${!__barg_commands[@]}")
-    for sub in "${subcmds[@]}"; do
-      printf -v subcmds_s "%s\n  - \x1b[38;5;4m%-16s\x1b[0m %s" "${subcmds_s}" "${sub#\*}" "${__barg_commands["${sub}"]}"
+    local __all_subcommands=("${!__barg_subcommands[@]}")
+    for sub in "${__all_subcommands[@]}"; do
+      printf -v subcmds_s "%s\n  - \x1b[38;5;4m%-16s\x1b[0m %s" "${subcmds_s}" "${sub#\*}" "${__barg_subcommands["${sub}"]}"
     done
     barg::exit_msg "Missing subcommand" "A subcommand is required, one of:${subcmds_s}"
   fi
@@ -638,13 +645,13 @@ function barg::parse {
     [[ -n "${BARG_SUBCOMMAND}" && "${flag_scope}" == '@' ]] && continue
     [[ -n "${flag_scope:1}" && "${flag_scope:1}" != "${BARG_SUBCOMMAND}" ]] && continue
 
-    local param_is_req="${BASH_REMATCH[2]}"                          # ?-> Is required
-    local param_pattern="${BASH_REMATCH[3]}"                         # !-> Pattern
-    local param_type="${BASH_REMATCH[4]}"                            # ?-> Data type
-    local param_is_vec="${BASH_REMATCH[5]}"                          # ?-> is a vec
+    local param_is_req="${BASH_REMATCH[2]}"                                               # ?-> Is required
+    local param_pattern="${BASH_REMATCH[3]}"                                              # !-> Pattern
+    local param_type="${BASH_REMATCH[4]}"                                                 # ?-> Data type
+    local param_is_vec="${BASH_REMATCH[5]}"                                               # ?-> is a vec
     local param_def_value="${BASH_REMATCH[21]:-${BASH_REMATCH[23]:-${BASH_REMATCH[25]}}}" # ?-> Default value
-    local param_var_name="${BASH_REMATCH[26]}"                       # !-> Variable name
-    local param_help_desc="${BASH_REMATCH[28]:-${BASH_REMATCH[30]}}" # ?-> Def description
+    local param_var_name="${BASH_REMATCH[26]}"                                            # !-> Variable name
+    local param_help_desc="${BASH_REMATCH[28]:-${BASH_REMATCH[30]}}"                      # ?-> Def description
 
     barg::is_in_arr "${param_var_name}" "${__ilegal_var_names__[@]}" && barg::exit_msg "Ilegal variable name" "${param_var_name} is a reserved variable name."
 
@@ -673,9 +680,7 @@ function barg::parse {
     exit
   fi
 
-  local argv=("${@}")
-  barg::normalize_args # Normalize joint arguments, from '-abc' to '-a -b -c'
-  declare -ag BARG_EXTRAS_BEFORE=("${argv[@]}")
+  declare -a BARG_TAKEN_ARGS
   declare -Ag BARG_ARGV_TABLE
 
   local i=0
@@ -718,30 +723,30 @@ function barg::parse {
   done
 
   local extras_count=0
-  local extras_var_name="${__barg_opts[extargs]:-BARG_POSITIONAL_ARGS}"
+  local extras_var_name="${__barg_opts[spare_args_var]:-BARG_SPARE_ARGS}"
   local i=0
-  while ((i < "${#BARG_EXTRAS_BEFORE[@]}")); do
-    if [[ "${BARG_EXTRAS_BEFORE[i]}" == "--" ]]; then
-      ((i++))
-    elif [[ "${BARG_EXTRAS_BEFORE[i]}" == -* ]]; then
-      barg::exit_msg "Unknown flag" "Flag \`${clhil}${BARG_EXTRAS_BEFORE[i]}\x1b[0m\` is not recognized"
+  declare -ag "${extras_var_name}"
+  for i in "${!argv[@]}"; do
+    for j in "${BARG_TAKEN_ARGS[@]}"; do
+      ((i == j)) && continue 2
+    done
+    local arg="${argv[i]}"
+    if [[ "${arg}" == -* ]]; then
+      barg::exit_msg "Unknown flag" "Flag \`${clhil}${arg}\x1b[0m\` is not recognized"
     fi
 
-    if [[ -n "${BARG_EXTRAS_BEFORE[i]}" ]]; then
-      declare -ag "${extras_var_name}+=(\"${BARG_EXTRAS_BEFORE[i]//\"/\\\"}\")"
-      ((extras_count++))
-    fi
-    ((i++))
+    declare -ag "${extras_var_name}+=(\"${arg//\"/\\\"}\")"
+    ((extras_count++))
   done
-  unset BARG_EXTRAS_BEFORE
+  unset BARG_TAKEN_ARGS
 
   # shellcheck disable=SC2034
   declare -g "${extras_var_name}_COUNT"="${extras_count}"
 
   if ((extras_count < 1)); then
-    if [[ -z "${BARG_SUBCOMMAND}" && "${__barg_opts[reqargs]}" == 'true' ]] \
-      || [[ -n "${BARG_SUBCOMMAND}" && "${BARG_SUBCOMMAND_NEEDS_EXTRAS}" == 'true' ]]; then
-      barg::exit_msg "Missing arguments" "positional arguments are required"
+    if [[ -z "${BARG_SUBCOMMAND}" && "${__barg_opts[spare_args_required]}" == 'true' ]] \
+      || [[ -n "${BARG_SUBCOMMAND}" && "${BARG_SUBCOMMAND_NEEDS_SPARE}" == 'true' ]]; then
+      barg::exit_msg "Missing arguments" "spare arguments are required"
     fi
   fi
   return 0
