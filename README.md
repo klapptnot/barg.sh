@@ -4,15 +4,18 @@
 
 `barg` is a pure bash argument parser that delivers professional CLI experiences with sub-20ms performance. No subshells, no external dependencies, less than 700 lines of optimized bash that transforms how you build command-line tools.
 
+> **See real daily-use examples:** Check out usage in [kitsh](https://github.com/klapptnot/kitsh) scripts.
+
 ## ✨ Features
 
 - **⚡ Lightning Fast**: Sub-20ms parsing with zero subshells
 - **🎨 Beautiful Help**: Auto-generated help with colors and formatting
-- **🔧 Rich Types**: Support for strings, integers, flags, vectors, and choice validation
+- **🔧 Rich Types**: Support for strings, integers, floats, flags, vectors, and choice validation
 - **📦 Zero Dependencies**: Pure bash with only built-in commands
 - **🎯 Subcommands**: Full subcommand support with per-command options
 - **🌈 Customizable Colors**: GCC_COLORS-style theming
-- **💪 Advanced Features**: Flag bundling (`-abc`), epilogs, and more
+- **🔄 Dynamic Completions**: Context-aware shell completions for Nushell and TSV format
+- **💪 Advanced Features**: Flag bundling (`-abc`), epilogs, switches, and more
 
 ## 🚀 Quick Start
 
@@ -25,9 +28,9 @@ function main {
   barg::parse "${@}" << BARG || { echo "Usage: $0 [OPTIONS] files..." && exit 1; }
   meta {
     summary: "Process files with various options"
-    extargs: 'FILES'
-    helpmsg: true
-    reqargs: true
+    spare_args_var: 'FILES'
+    help_enabled: true
+    spare_args_required: true
   }
 
   f/force :flag => FORCE "Force overwrite existing files"
@@ -37,7 +40,7 @@ function main {
 BARG
   barg::unload
 
-  echo "Processing ${#FILES[@]} files with format: $FORMAT"
+  echo "Processing ${#FILES[@]} files with format: ${FORMAT}"
 }
 
 main "${@}"
@@ -53,9 +56,9 @@ Usage:
 Options:
   -h, --help                   flag Show this help message and exit
   -f, --force                  flag Force overwrite existing files
-  -o, --output                <str> Output directorys
+  -o, --output                <str> Output directory
   -v, --verbose                flag Enable verbose output
-  -t, --type                        Output format
+  -t, --type                   enum Output format
 ```
 
 ## 🔧 Flag Bundling
@@ -77,8 +80,8 @@ myapp -v4        # Same as: myapp -v 4
 The (abstract and) basic syntax form is the following:
 
 ```bnf
-declaration ::= <name>? "!"? <option> <type>? <default>? "=>" <var> <desc>?
-name ::= "@" <identifier>?
+declaration ::= <scope>? "!"? <option> <type>? <default>? "=>" <var> <desc>?
+scope ::= "@" <identifier>?
 option ::= <short>? <long> | <long> | "{" {<entries>} "}" | "[" {<value>} "]"
 entries ::= <short>? <long> ":" <string>
 value ::= <string> | <number> | <boolean>
@@ -122,16 +125,17 @@ p/priority ["low" "normal" "high"] "normal" => PRIORITY "Task priority"
 
 ```bash
 meta {
-  helpmsg: true
+  help_enabled: true
 }
 
 commands {
-  install: 'Install packages'
-  remove: 'Remove packages'
+  # Mark subcommands that require spare arguments (the * at the start)
+  *install: 'Install packages'
+  *remove: 'Remove packages'
   help: 'Show help'
 }
 
-# Global options (with or without subcomands)
+# Global options (available with or without subcommands)
 f/force :flag => FORCE "Force operation"
 
 # A flag only available when no subcommand has been found (the @ at the start)
@@ -144,10 +148,11 @@ f/force :flag => FORCE "Force operation"
 
 ### Switches
 
+Switches are mutually exclusive option groups where selecting one sets a specific value:
+
 ```bash
-# Required mode, flags inside this dont require a value
-# the value at the right will be set to the variable name (OP_MODE)
-# If none was found, and no default value was set, it will be `0`
+# Required mode switch - no default value will be set, error if missing
+# The value at the right will be set to the variable name (OP_MODE)
 ! {
   l/list: "list"
   g/get: "download"
@@ -158,6 +163,81 @@ f/force :flag => FORCE "Force operation"
 {red: "#ff0000" green: "#00ff00" blue: "#0000ff"} "#ffffff" => COLOR
 ```
 
+## 🎯 Dynamic Shell Completions
+
+`barg` provides **context-aware completions** that automatically generate based on your argument definitions. The completions are intelligent and adapt to the current parsing state.
+
+### Supported Formats
+
+#### Nushell Completions
+```bash
+let carapace_completer = {|spans|
+  let carap_comp = (carapace $spans.0 nushell ...$spans)
+  if $carap_comp != '[]' and $carap_comp != '' {
+    return ($carap_comp | from json)
+  }
+  if (barg-comp-allowed $span.0) {
+    let completions = (^$spans.0 @nucomp ...($spans))
+    if $completions != '[]' {
+      return ($completions | from json)
+    }
+  }
+}
+```
+
+#### TSV Completions
+```bash
+# Get tab-separated completions
+# Easy to setup for your default shell
+myapp @tsvcomp myapp --verb
+# Output format: <option>\t<color_code>\t<type>\t<description>
+```
+
+**Purpose**: TSV format is designed for users to create their own shell compatibility layers. Only Nushell has official built-in support due to its rich completions features.
+
+**Working Bash Example** (basic implementation):
+```bash
+_my_app_completion() {
+  local cur prev words cword
+  _init_completion || return
+
+  # TSV output: <value>\t<color>\t<type>\t<desc>
+  mapfile -t COMPREPLY < <(my-app @tsvcomp "${words[@]}")
+  
+  # Bash (readline) doesn't support descriptions natively
+  # Keep full TSV line until selected, then extract just the value
+  if [[ "${#COMPREPLY[@]}" == 1 ]]; then
+    COMPREPLY=("${COMPREPLY[0]%%$'\t'*}")
+  fi
+}
+complete -F _my_app_completion my-app
+```
+
+> **Note**: This bash example is basic. The tab characters may display as `^I` in some contexts. Users can build more sophisticated wrappers using the color codes and type information for custom formatting.
+
+### How It Works
+
+The completion system is context-aware and provides:
+- **Subcommand suggestions** with descriptions when no subcommand is present
+- **Flag completions** filtered by what's already been used
+- **Enum value suggestions** when completing an argument that accepts specific values
+- **Color-coded priorities**: subcommands (0), optional flags (1), required flags (2), enum values (3)
+
+```bash
+# Example: After typing `myapp --level `
+# Completions will show: debug, info, warn, error
+
+# Example: After using `-f`, it won't suggest `-f` again
+# but will suggest other available options
+```
+
+### Disabling Completions
+
+```bash
+meta {
+  completion_enabled: false  # Disable dynamic completions
+}
+```
 
 ## 📋 Error Handling
 
@@ -173,140 +253,179 @@ $ myapp --level invalid # Invalid choice
 ERROR: myapp -> Invalid parameter value... Argument of `--level` must be between: debug, info, warn or error
 ```
 
-These behavior can be customized like the following
+These behaviors can be customized:
 
 ```bash
-# return 0 -> ignore error
+# Custom error handler (return 0 to ignore error, or exit with code)
 on_arg_err() {
   echo "Argument error: ${1}"
-  echo "${1}"
+  echo "${2}"
   return 32 # same as `exit 32`
 }
-barg::parse "${@}" << BARG ||
+
+barg::parse "${@}" << BARG
 meta {
-  helpmsg: true
-  exitnow: false
-  onerrcb: "on_arg_err"
+  help_enabled: true
+  on_error: "on_arg_err"
 }
 BARG
 ```
 
-## No Arguments Handling
+### Using `barg::exit_msg`
 
-By default, `barg` only returns 1 if no arguments are passed (otherwise always 0), allowing scripts to handle this case:
+You can use the built-in error handler in your own validation logic:
+
+```bash
+barg::parse "${@}" << BARG
+# ... definitions ...
+BARG
+
+# Custom validation
+if [[ -n "$FILES" && -n "$DIR" ]]; then
+  barg::exit_msg "Conflicting options" "Cannot use both --files and --directory"
+fi
+
+if [[ -z "$FILES" && -z "$DIR" ]]; then
+  barg::exit_msg "Missing input" "Either --files or --directory is required"
+fi
+```
+
+## 🔄 No Arguments Handling
+
+By default, `barg` returns 1 if no arguments are passed (otherwise always 0), allowing scripts to handle this case:
 
 ```bash
 barg::parse "${@}" << BARG || { echo "Usage: $0 [OPTIONS]" && exit 1; }
 meta {
-  helpmsg: true
+  help_enabled: true
 }
 BARG
 ```
 
-You can use `#[always]` to process even with no args, and maybe combine it with `onerrcb` property for error handling, or to display
+Use `#[always]` to process even with no args:
 
 ```bash
-barg::parse "${@}" << BARG # it will always return 0
+barg::parse "${@}" << BARG # Always returns 0, even with no arguments
 #[always]
 meta {
-  helpmsg: true
+  help_enabled: true
 }
 BARG
 ```
 
-## Configuration
+## 🎨 Configuration
 
 The `meta` block configures global behavior:
 
 <details>
-<summary>Click to expand all properties</summary>
+<summary>Click to expand all meta properties</summary>
 
-- **prognam**: Program name in error messages (default: output of `basename "${0}`")
-  - Example: `prognam: "myapp"`
+### Core Settings
 
-- **palette**: Error message color scheme, fill it with ':' for no colors (default: empty)
-  - Example: `palette: "38;5;9:38;5;50"`
+- **argv_zero**: Program name in error messages and help (default: `basename "${0}"`)
+  - Example: `argv_zero: "myapp"`
 
-- **summary**: Program description (default: "")
+- **summary**: Short tool description shown in help
   - Example: `summary: "A tool to process files"`
 
-- **onerrcb**: Function name to run on error (default: "")
-  - Example: `onerrcb: "on_args_err"`
+### Argument Handling
 
-- **extargs**: Collect positional parameters (default: "")
-  - Example: `extargs: "FILES"`
+- **spare_args_var**: Variable name to store positional/spare arguments (default: `BARG_SPARE_ARGS`)
+  - Example: `spare_args_var: "FILES"`
+  - Also creates `${spare_args_var}_COUNT` variable with the count
 
-- **epilogs**: Array name for epilog text (default: "")
-  - Example: `epilogs: "EPILOG_TEXT"`
+- **spare_args_required**: Require trailing positional arguments (default: `false`)
+  - Example: `spare_args_required: true`
 
-- **display**: Print output to console (default: true)
-  - Example: `display: false`
+- **subcommand_required**: Require a subcommand to be specified (default: `false`)
+  - Example: `subcommand_required: true`
 
-- **toerror**: Redirect to stderr (default: true)
-  - Example: `toerror: false`
+- **allow_empty_values**: Allow empty string values for required parameters (default: `false`)
+  - Example: `allow_empty_values: true`
 
-- **helpmsg**: Generate help message (default: false)
-  - Example: `helpmsg: true`
+### Display & Output
 
-- **showdef**: Show defaults in help (default: false)
-  - Example: `showdef: true`
+- **help_enabled**: Enable help message generation (default: `false`)
+  - Example: `help_enabled: true`
 
-- **reqargs**: Require positional args (default: false)
-  - Example: `reqargs: true`
+- **show_defaults**: Show default values in help and completions (default: `false`)
+  - Example: `show_defaults: true`
 
-- **reqcmds**: Require subcommand (default: false)
-  - Example: `reqcmds: true`
+- **epilog_lines**: Array variable name containing epilog text lines (default: `""`)
+  - Example: `epilog_lines: "EPILOG_TEXT"`
+  - Use `{acc}` placeholder for accent color in epilog text
 
-- **checkvl**: Allow empty required values (default: false)
-  - Example: `checkvl: true`
+- **quiet_exit**: Suppress console output (default: `false`)
+  - Example: `quiet_exit: true`
+
+- **use_stderr**: Use stderr for output/errors (default: `true`)
+  - Example: `use_stderr: false`
+
+### Customization
+
+- **color_palette**: Error message color scheme, use `::::::::::` for no colors (default: empty)
+  - Example: `color_palette: "38;5;9:38;5;50:38;5;122:38;5;230:38;5;231:38;5;203:38;5;87:38;5;85:38;5;230"`
+  - Format: `acc:err:hil:cmd:req:typ:def:dsv:dov` (9 color codes)
+
+- **on_error**: Function name to call on error (default: `""`)
+  - Example: `on_error: "on_args_err"`
+  - Function receives `error_type` and `error_desc` as arguments
+
+### Feature Toggles
+
+- **completion_enabled**: Enable dynamic completion support (default: `true`)
+  - Example: `completion_enabled: false`
 
 </details>
 
-Simple example:
+### Simple Example
 
 ```bash
 barg::parse "${@}" << BARG
 meta {
-  prognam: "myapp"
+  argv_zero: "myapp"
   summary: "Simple file processor"
-  extargs: "FILES"
-  helpmsg: true
+  spare_args_var: "FILES"
+  help_enabled: true
+  show_defaults: true
 }
 
 v/verbose :flag => VERBOSE "Enable verbose mode"
-o/output :str => OUTPUT "Output file"
+o/output :str "output.txt" => OUTPUT "Output file"
 BARG
 ```
 
 ## 🎨 Color Customization
 
-Customize colors using GCC_COLORS-style syntax:
+Customize colors using colon-separated ANSI codes (9 total):
 
 ```bash
 meta {
-  palette: '38;5;9:38;5;50:38;5;122:38;5;230:38;5;231:38;5;203:38;5;117'
+  color_palette: '38;5;9:38;5;50:38;5;122:38;5;230:38;5;231:38;5;203:38;5;87:38;5;85:38;5;230'
 }
 ```
 
-Color mapping:
-- `acc`: Accents for help message
-- `err`: Error message colors
-- `hil`: Highlightings for the patterns
-- `cmd`: Command color in help message
-- `req`: Required flags color in help message
-- `typ`: Type annotations in help message
-- `def`: Word `def` color before the value in help message
-- `dsv`: String value color in help message
-- `dov`: Other values' colors in help message
+Color mapping (in order):
+1. `acc`: Accents for help message headings
+2. `err`: Error message colors
+3. `hil`: Highlighting for flag patterns
+4. `cmd`: Command/program name color in help
+5. `req`: Required flags color in help
+6. `typ`: Type annotations in help (`<str>`, `[int]`)
+7. `def`: Word "def" color before default values
+8. `dsv`: String default values color
+9. `dov`: Other default values color (numbers, booleans)
+
+To disable colors completely: `palette: ":::::::::"`
 
 ## ⚡ Performance
 
-`barg` maps flags to value indices, this enables O(1) flag lookups instead of O(n) string parsing:
+`barg` maps flags to value indices for O(1) flag lookups instead of O(n) string parsing:
 
 ```bash
 # Internal representation
-declare -a argv=([0]="--output" [1]="file.txt" [2]"-v")
-declare -A _argv_table=([--output]="1" [-v]="3")
+declare -a argv=([0]="--output" [1]="file.txt" [2]="-v")
+declare -A BARG_ARGV_TABLE=([--output]="1" [-v]="3")
 ```
 
 **Benchmarks:**
@@ -314,20 +433,28 @@ declare -A _argv_table=([--output]="1" [-v]="3")
 - Complex tool (32+ flags): ~25ms
 - Zero subshells, pure bash built-ins
 
-## 🛠️ Simple Examples
+### Key Optimizations
+
+- Single regex pass for argument normalization
+- Hash table lookups for flag resolution
+- No external processes or subshells
+- Efficient string manipulation using bash built-ins
+
+## 🛠️ Advanced Examples
 
 <details>
-<summary>Click to expand examples</summary>
-
-### File Processing Tool
+<summary>File Processing Tool</summary>
 
 ```bash
+#!/usr/bin/bash
+source barg.sh
+
 barg::parse "${@}" << BARG
 meta {
   summary: "Bulk file rename utility"
-  extargs: 'PATTERN'
-  helpmsg: true
-  reqargs: true
+  spare_args_var: 'PATTERN'
+  help_enabled: true
+  spare_args_required: true
 }
 
 f/files :strs => FILES "Files to process"
@@ -344,16 +471,25 @@ BARG
 
 [[ -z "$FILES" && -z "$DIR" ]] &&
   barg::exit_msg "Missing input" "Either --files or --directory is required"
+
+# Your processing logic here
+barg::unload
 ```
 
-### Network Tool with Subcommands
+</details>
+
+<details>
+<summary>Network Tool with Subcommands</summary>
 
 ```bash
+#!/usr/bin/bash
+source barg.sh
+
 barg::parse "${@}" << BARG
 meta {
   summary: "Network utility toolkit"
-  helpmsg: true
-  reqcmds: true
+  help_enabled: true
+  subcommand_required: true
 }
 
 commands {
@@ -374,16 +510,65 @@ t/timeout :int 5 => TIMEOUT "Timeout in seconds"
 @ping c/count :int 4 => PING_COUNT "Number of pings"
 @ping i/interval :str 1 => PING_INTERVAL "Interval between pings"
 BARG
-# Unset all variables and functions after use
+
+# Execute based on subcommand
+case "$BARG_SUBCOMMAND" in
+  scan)
+    echo "Scanning ${IP_RANGE} on ports: ${PORTS[*]}"
+    ;;
+  ping)
+    echo "Pinging ${PING_COUNT} times with ${PING_INTERVAL}s interval"
+    ;;
+  trace)
+    echo "Running traceroute with ${TIMEOUT}s timeout"
+    ;;
+esac
+
 barg::unload
 ```
 
 </details>
 
-## 🎯 Comparations
+<details>
+<summary>Application with Epilog and Help</summary>
+
+```bash
+#!/usr/bin/bash
+source barg.sh
+
+EPILOG_TEXT=(
+  ""
+  "{acc}Examples:{acc}"
+  "  myapp -v process file1.txt file2.txt"
+  "  myapp --format json --output results/ *.txt"
+  ""
+  "{acc}For more information, visit: https://example.com{acc}"
+)
+
+barg::parse "${@}" << BARG
+meta {
+  summary: "Advanced file processor"
+  spare_args_var: "FILES"
+  help_enabled: true
+  epilog_lines: "EPILOG_TEXT"
+  show_defaults: true
+}
+
+v/verbose :flag => VERBOSE "Enable verbose output"
+f/format ["json" "yaml" "xml"] "json" => FORMAT "Output format"
+o/output :str "." => OUTPUT_DIR "Output directory"
+BARG
+
+barg::unload
+```
+
+</details>
+
+## 🎯 Comparisons
 
 ### From getopts
 
+**Before (getopts):**
 ```bash
 while getopts "f:o:vh" opt; do
   case $opt in
@@ -393,10 +578,13 @@ while getopts "f:o:vh" opt; do
     h) show_help; exit 0 ;;
   esac
 done
+```
 
-# No need for `show_help` function
+**After (barg):**
+```bash
+# No need for manual `show_help` function
 barg::parse "${@}" << BARG
-meta { helpmsg: 'true' }
+meta { help_enabled: true }
 f/force :flag => FORCE "Force operation"
 o/output :str => OUTPUT "Output file"
 v/verbose :flag => VERBOSE "Verbose mode"
@@ -405,6 +593,7 @@ BARG
 
 ### From manual parsing
 
+**Before (manual):**
 ```bash
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -422,13 +611,66 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+```
 
-# no need for descriptions
+**After (barg):**
+```bash
+# Automatic validation and error messages
 barg::parse "${@}" << BARG
-f/force :flag => FORCE
-o/output :str => OUTPUT
+f/force :flag => FORCE "Force operation"
+o/output :str => OUTPUT "Output file"
 BARG
 ```
+
+## 🔍 Variables and Cleanup
+
+### Exported Variables
+
+After parsing, `barg` creates these global variables:
+
+- **`BARG_SUBCOMMAND`**: The selected subcommand (empty if none)
+- **`BARG_ARGV_TABLE`**: Associative array that tracks which variables were set by the user
+  - If `BARG_ARGV_TABLE[VAR_NAME]` is `"!"`, the user provided the value via command line
+  - If empty, the value was NOT provided by the user (using the default from barg definition)
+- **`${spare_args_var}`**: Array of spare/positional arguments (configurable name, default name `BARG_SPARE_ARGS`)
+- **`${spare_args_var}_COUNT`**: Count of spare arguments
+- All your defined variables from the `=> VAR_NAME` syntax
+
+#### Example: Priority System (CLI > Config > Default)
+
+```bash
+# Option definition with default value
+@ t/timeout :num 5 => PROC_TIMEOUT "Number of seconds to wait for response"
+
+# After parsing, PROC_TIMEOUT always has a value (either from user or default: 5)
+
+# Override with config file value ONLY if user didn't provide it on CLI
+[[ -z "${BARG_ARGV_TABLE[PROC_TIMEOUT]}" && -n "${THIS_CONFIG[timeout]}" ]] \
+  && PROC_TIMEOUT="${THIS_CONFIG[timeout]}"
+
+# Result:
+# - If user provided --timeout, PROC_TIMEOUT keeps that value
+# - Else if config has timeout, PROC_TIMEOUT uses config value
+# - Else PROC_TIMEOUT keeps the default value (5)
+```
+
+This pattern enables a clean priority system: **CLI args > config file > barg defaults**
+
+### Cleanup
+
+Always call `barg::unload` after parsing to clean up:
+
+```bash
+barg::parse "${@}" << BARG
+# ... definitions ...
+BARG
+barg::unload  # Removes all barg functions and option variables
+# BARG_SUBCOMMAND, BARG_ARGV_TABLE, and spare args variables won't be removed
+
+# Your script logic here
+```
+
+This unsets all barg-related functions and variables to keep your environment clean.
 
 ## 📄 License
 
@@ -438,4 +680,4 @@ MIT License - see LICENSE file for details.
 
 <div align="center">Created by <a href="https://github.com/Klapptnot">Klapptnot</a> with ❄️💜🩷🩵</div>
 
-<div align="center"><bold>"The fastest argument parser you never knew you needed!"</bold> ✨</div>
+<div align="center"><b>"The fastest argument parser you never knew you needed!"</b> ✨</div>
