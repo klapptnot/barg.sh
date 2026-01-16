@@ -920,13 +920,18 @@ function barg::parse {
   local extras_var_name="${__barg_opts[spare_args_var]:-BARG_SPARE_ARGS}"
   local i=0
   declare -ag "${extras_var_name}"
-  for i in "${!argv[@]}"; do
-    for j in "${BARG_TAKEN_ARGS[@]}"; do
-      ((i == j)) && continue 2
-    done
-    local arg="${argv[i]}"
-    if [[ "${arg}" == -* ]]; then
-      barg::exit_msg "Unknown flag" "Flag \`${clhil}${arg}\x1b[0m\` is not recognized"
+  for ((i = 0; i < ${#argv[@]}; i++)); do
+    if [[ "${argv[i]}" != '--' ]]; then
+      for j in "${BARG_TAKEN_ARGS[@]}"; do
+        ((i == j)) && continue 2
+      done
+      local arg="${argv[i]}"
+      if [[ "${arg}" == -* ]]; then
+        barg::exit_msg "Unknown flag" "Flag '${clhil}${arg}\x1b[0m' is not recognized"
+      fi
+    else
+      ((i++))
+      local arg="${argv[i]}"
     fi
 
     declare -ag "${extras_var_name}+=(\"${arg//\"/\\\"}\")"
