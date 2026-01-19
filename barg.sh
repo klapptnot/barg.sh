@@ -78,10 +78,12 @@ function barg::nucompletion_adapter {
     value="${value/#\$/}"         # remove leading $ (if found)
     value="${value:1:-1}"         # remove '...' quotes added
     value="${value//\'\\\'\'/\'}" # remove '\'' no need to escape
+    value="${value//\"/\\\"}"     # escape "
     desc="${desc@Q}"
     desc="${desc/#\$/}"
     desc="${desc:1:-1}"
     desc="${desc//\'\\\'\'/\'}"
+    desc="${desc//\"/\\\"}"
     printf -v s '{"value":"%s ", "display": "%s", "description": "%s", "style": {"fg": "%s"}}' "${value}" "${value}" "${desc}" "${colors[color]}"
     res+=("${s}")
   done
@@ -422,9 +424,8 @@ function barg::gen_help_message {
       local default_str="${__defaults[i]}"
       if [[ "${type}" == "str" ]]; then
         # For strings, limit to 45 chars and add  if needed
-        [[ ${#__defaults[i]} -gt 45 ]] \
-          && default_str="${cldsv}\"${default_str:0:44}\"…" \
-          || default_str="${cldsv}${default_str}"
+        [[ ${#__defaults[i]} -gt 45 ]] && default_str="${default_str:0:44}…"
+        default_str="${cldsv}\"${default_str}\""
       else
         # For nums/bools, show full value
         default_str="${cldov}${__defaults[i]}"
@@ -498,29 +499,29 @@ function barg::dynamic_completion {
   local total_args="${#argv[@]}"
   ((total_args > 0)) && curr="${argv[-1]}"
   local __all_subcommands=("${!__barg_subcommands[@]}")
-  ((${#__all_subcommands[@]} > 0)) && {
-    if [ -n "${BARG_SUBCOMMAND}" ] && ((total_args == 0)); then
-      printf '%s\t0\t%s\n' "${BARG_SUBCOMMAND}" "${__barg_subcommands["${BARG_SUBCOMMAND}"]:-${__barg_subcommands["*${BARG_SUBCOMMAND}"]}}"
-      [ "${__barg_opts[subcommand_required]}" == 'true' ] && return
-    elif [ -z "${BARG_SUBCOMMAND}" ]; then
-      compgen -V subcmds -W "${__all_subcommands[*]/#\*/}" -- "${curr}"
-      for c in "${subcmds[@]}"; do
-        printf '%s\t0\t%s\n' "${c}" "${__barg_subcommands["${c}"]:-${__barg_subcommands["*${c}"]}}"
-      done
+  if ((${#__all_subcommands[@]} > 0 && total_args == 1)); then
+    compgen -V subcmds -W "${__all_subcommands[*]/#\*/}" -- "${curr}"
+
+    for c in "${subcmds[@]}"; do
+      printf '%s\t0\t%s\n' "${c}" "${__barg_subcommands["${c}"]:-${__barg_subcommands["*${c}"]}}"
+    done
+
+    [ "${__barg_opts[subcommand_required]}" == 'true' ] && {
       if [[ "${__barg_opts[help_enabled]}" == 'true' && "${curr}" == '-'* ]]; then
         local desc="Show this help message and exit"
         printf -- "--help\t1\t%-9s %s\n" "flag" "${desc}"
         printf -- "-h\t1\t%-9s %s\n" "flag" "${desc}"
       fi
-      [ "${__barg_opts[subcommand_required]}" == 'true' ] && return
-    fi
-  }
+      return
+    }
+  fi
 
   [[ "${#params[@]}" == 0 ]] && return
   local show_def_hint=false
   [[ "${__barg_opts[show_defaults]}" == 'true' ]] && show_def_hint=true
 
-  local comp_lines=()
+  local long_opts=()
+  local short_opts=()
   function __print_flag_line {
     if [[ "${total_args}" != '0' && "--${long}" != "${curr}"* ]]; then
       [[ -z "${short}" || "-${short}" != "${curr}"* ]] && return
@@ -534,17 +535,17 @@ function barg::dynamic_completion {
     if ${show_def_hint} && [[ -n "${__defaults[i]}" && "${type}" != "switch" ]]; then
       local def_v="${__defaults[i]}"
       # For strings, limit to 45 chars and add if needed
-      [[ "${type}" == "str" && ${#def_v} -gt 45 ]] && def_v="\"${def_v:0:44}…\""
-      desc="${desc} (def: ${def_v})"
+      [[ "${type}" == "str" && ${#def_v} -gt 45 ]] && def_v="${def_v:0:44}…"
+      desc="${desc} (def: \"${def_v}\")"
     fi
 
     [[ "--" == "${curr:0:2}"* ]] && {
       printf -v a -- "--%s\t%s\t%-9s %s\n" "${long}" "${color}" "${type}" "${desc}"
-      comp_lines+=("${a}")
+      long_opts+=("${a}")
     }
     [[ -n "${short}" && "${curr}" != --* ]] && {
       printf -v a -- "-%s\t%s\t%-9s %s\n" "${short}" "${color}" "${type}" "${desc}"
-      comp_lines+=("${a}")
+      short_opts+=("${a}")
     }
   }
 
@@ -589,7 +590,8 @@ function barg::dynamic_completion {
 
     param="${param:1:-1}"
     type="switch"
-    local swlinecount="${#comp_lines[@]}"
+    local lopt_count="${#long_opts[@]}"
+    local sopt_count="${#short_opts[@]}"
     while [[ "${param}" =~ ${__obj_regex__} ]]; do
       local short="${BASH_REMATCH[2]}"
       local long="${BASH_REMATCH[3]}"
@@ -597,7 +599,8 @@ function barg::dynamic_completion {
 
       for cci in "${argv[@]:0:$((total_args - 1))}"; do
         [[ "${cci}" == "-${short}" || "${cci}" == "--${long}" ]] && {
-          comp_lines=("${comp_lines[@]:0:swlinecount}")
+          long_opts=("${long_opts[@]:0:lopt_count}")
+          short_opts=("${short_opts[@]:0:sopt_count}")
           break 2
         }
       done
@@ -619,7 +622,7 @@ function barg::dynamic_completion {
     __print_flag_line
   fi
 
-  printf '%s' "${comp_lines[@]}"
+  printf '%s' "${long_opts[@]}" "${short_opts[@]}"
   return
 }
 
@@ -637,9 +640,9 @@ function barg::dynamic_completion {
 #     #[always]
 #     meta {
 #       argv_zero: 'Example'
-#       subcommand_required: 'true'
-#       spare_args_required: 'true'
-#       help_enabled: 'true'
+#       subcommand_required: true
+#       spare_args_required: true
+#       help_enabled: true
 #       spare_args_var: 'THIS_POSITIONAL_ARGS'
 #     }
 #
@@ -768,7 +771,7 @@ function barg::parse {
         BARG_SUBCOMMAND_NEEDS_SPARE=true
       }
       BARG_SUBCOMMAND="${1}"
-      shift 1
+      [ -z "${completion_mode}" ] && shift 1
     fi
   fi
   local __missing_subcmd=false
