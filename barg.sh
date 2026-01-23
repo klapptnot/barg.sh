@@ -36,15 +36,12 @@ declare -Ag __barg_opts=(
   [use_stderr]=true           # Use stderr for output/errors
 )
 declare -Ag __barg_palette=(
-  [acc]='\x1b[38;5;12m'  # Blue
-  [err]='\x1b[38;5;9m'   # Red
-  [hil]='\x1b[38;5;50m'  # Cyan
-  [cmd]='\x1b[38;5;230m' # Very light yellow
-  [req]='\x1b[38;5;203m' # Light red
-  [typ]='\x1b[38;5;122m' # Light cyan
-  [def]='\x1b[38;5;87m'  # Cyan
-  [dsv]='\x1b[38;5;85m'  # Light green
-  [dov]='\x1b[38;5;230m' # Very light yellow
+  [acc]='\x1b[38;5;50m'
+  [cmd]='\x1b[38;5;230m'
+  [req]='\x1b[38;5;203m'
+  [err]='\x1b[38;5;9m'
+  [str]='\x1b[38;5;2m'
+  [any]='\x1b[38;5;3m'
 )
 declare -Ag __barg_subcommands=()
 
@@ -54,8 +51,8 @@ function barg::unload {
     barg::is_in_arr \
     barg::normalize_args \
     barg::validate_numeric \
-    barg::clean_fields \
     barg::param_set \
+    barg::colorize \
     barg::gen_help_message \
     barg::dynamic_completion \
     barg::nucompletion_adapter \
@@ -93,7 +90,7 @@ function barg::nucompletion_adapter {
 }
 
 function barg::var_exists {
-  declare -p "${1}" &> /dev/null
+  declare -p "${1}" &>/dev/null
 }
 
 function barg::is_in_arr {
@@ -140,15 +137,6 @@ function barg::normalize_args {
   done
 }
 
-function barg::clean_fields {
-  for index in "${@}"; do
-    if ((index >= 0 && index < ${#argv[@]})); then
-      [ "${argv[index]}" == '--' ] && BARG_TAKEN_ARGS+=("$((index + 1))")
-      BARG_TAKEN_ARGS+=("${index}")
-    fi
-  done
-}
-
 function barg::validate_numeric {
   local value="${1}"
   local type="${2}"
@@ -157,25 +145,25 @@ function barg::validate_numeric {
   local type_name=""
 
   case "${type}" in
-    'num')
-      regex="${__num_regex__}"
-      type_name="int or float"
-      ;;
-    'int')
-      regex="${__int_regex__}"
-      type_name="integer"
-      ;;
-    'float')
-      regex="${__flt_regex__}"
-      type_name="float"
-      ;;
+  'num')
+    regex="${__num_regex__}"
+    type_name="int{r} or {acc}float"
+    ;;
+  'int')
+    regex="${__int_regex__}"
+    type_name="integer"
+    ;;
+  'float')
+    regex="${__flt_regex__}"
+    type_name="float"
+    ;;
   esac
 
   if ! [[ "${value}" =~ ${regex} ]]; then
     if [[ "${value}" =~ ^[_\.0-9]*$ ]]; then
-      barg::exit_msg "Unknown format" "Invalid numerical value, expected a ${type_name} (${value})"
+      barg::exit_msg "Unknown format" "Invalid numerical value, expected a {acc}${type_name}{r} ({any}${value}{r})"
     fi
-    barg::exit_msg "Type mismatch" "Expected ${type_name}, got string (${value})"
+    barg::exit_msg "Type mismatch" "Expected {acc}${type_name}{r}, got string ({any}${value}{r})"
   fi
 }
 
@@ -194,20 +182,31 @@ function barg::param_set {
   ! ${is_vec_list} && barg::var_exists "${set_var_name}" && return 0
 
   local check_valid_item=false
-  if [[ "${param_sign}" == '{'*'}' ]]; then
+  if [[ "${param_sign}" == *'}' ]]; then
     local STR="${param_sign:1:-1}"
+    STR="${STR#*\{}"
     while [[ "${STR}" =~ ${__obj_regex__} ]]; do
-      local short="-${BASH_REMATCH[2]}"
-      local long="--${BASH_REMATCH[3]}"
+      local short="${BASH_REMATCH[2]}"
+      local long="${BASH_REMATCH[3]}"
       local value="${BASH_REMATCH[5]:-${BASH_REMATCH[7]}}"
+
+      if [ -n "${short}" ]; then
+        short="-${short:0:-1}"
+        long="--${long}"
+      else
+        (("${#long}" > 1)) && long="--${long}" || {
+          short="-${long}"
+          long=''
+        }
+      fi
 
       if barg::is_in_arr "${short}" "${!BARG_ARGV_TABLE[@]}"; then
         declare -g "${set_var_name}=${value}"
-        barg::clean_fields $((${BARG_ARGV_TABLE["${short}"]} - 1))
+        BARG_TAKEN_ARGS+=("$((${BARG_ARGV_TABLE["${short}"]} - 1))")
         unset "BARG_ARGV_TABLE[${short}]"
       elif barg::is_in_arr "${long}" "${!BARG_ARGV_TABLE[@]}"; then
         declare -g "${set_var_name}=${value}"
-        barg::clean_fields $((${BARG_ARGV_TABLE["${long}"]} - 1))
+        BARG_TAKEN_ARGS+=("$((${BARG_ARGV_TABLE["${long}"]} - 1))")
         unset "BARG_ARGV_TABLE[${long}]"
       else
         STR="${STR/#"${BASH_REMATCH[0]}"/}"
@@ -218,7 +217,7 @@ function barg::param_set {
       BARG_ARGV_TABLE["${set_var_name}"]="!"
       return
     done
-    ${is_required} && return 1
+    ${is_required} && barg::exit_msg "Missing required arguments" "${param_type:+"{acc}${param_type}{r} "}switch is a required argument"
     declare -g "${set_var_name}=${def_value:-0}"
     return
   fi
@@ -241,28 +240,31 @@ function barg::param_set {
   unset maybe_checked_list STR
 
   #shellcheck disable=2178
-  local __short__="-${param_sign%/*}"
-  local __long__="--${param_sign#*/}"
+  local __short__=""
+  local __long__=""
+  local signat=""
 
-  # local clhil="${__barg_palette[hil]}"
-  if [ "-${__short__}" != "${__long__}" ]; then
-    local signat="${clhil}${__short__}\x1b[0m/${clhil}${__long__}\x1b[0m"
+  if [[ "${param_sign}" == ?'/'* ]]; then
+    __short__="-${param_sign%/*}"
+    __long__="--${param_sign#*/}"
+    signat="{acc}${__short__}{r}/{acc}${__long__}{r}"
   else
-    local signat="${clhil}${__long__}\x1b[0m"
+    (("${#param_sign}" > 1)) && __long__="--${param_sign}" || __short__="-${param_sign}"
+    signat="{acc}${__long__:-${__short__}}{r}"
   fi
 
   # Check if it was found in command line and set its
   # form for the key of the args table, otherwise set default
-  if [ -n "${BARG_ARGV_TABLE["${__short__}"]}" ]; then
+  if [ -n "${BARG_ARGV_TABLE["${__short__:- }"]}" ]; then
     local the_found_flag="${__short__}"
-  elif [ -n "${BARG_ARGV_TABLE["${__long__}"]}" ]; then
+  elif [ -n "${BARG_ARGV_TABLE["${__long__:- }"]}" ]; then
     local the_found_flag="${__long__}"
   else
     ${is_required} && barg::exit_msg "Missing required arguments" "${signat} is a required argument"
     if [ "${param_type}" == "flag" ]; then
       case "${def_value}" in
-        'true' | 'false') declare -g "${set_var_name}=${def_value}" ;;
-        *) declare -g "${set_var_name}=false" ;;
+      'true' | 'false') declare -g "${set_var_name}=${def_value}" ;;
+      *) declare -g "${set_var_name}=false" ;;
       esac
     elif ${is_vec_list}; then
       declare -ag "${set_var_name}=()"
@@ -278,39 +280,41 @@ function barg::param_set {
   # take last value as valid
   local current_value_index="${BARG_ARGV_TABLE[${the_found_flag}]##*\ }"
 
+  local _added_indexes=()
   if ! ${is_vec_list}; then
     local value="${argv[current_value_index]}"
     case "${param_type}" in
-      'flag')
-        case "${def_value}" in
-          'true') declare -g "${set_var_name}=false" ;;
-          *) declare -g "${set_var_name}=true" ;;
-        esac
-        barg::clean_fields "$((current_value_index - 1))"
-        ;;
-      *)
-        if [[ "${value}" == -* ]]; then
-          [ "${value}" != '--' ] && barg::exit_msg "Param-like value" "Value for '${the_found_flag}' looks like an option/flag. Use '-- ${value}' to bypass"
-          value="${argv[current_value_index + 1]}"
-        fi
-        if [ "${param_type}" == 'str' ]; then
-          declare -g "${set_var_name}=${value}"
-        else
-          barg::validate_numeric "${value}" "${param_type}"
-          declare -g "${set_var_name}=${value//_/}"
-        fi
-        barg::clean_fields "${current_value_index}" "$((current_value_index - 1))"
-        ;;
+    'flag')
+      case "${def_value}" in
+      'true') declare -g "${set_var_name}=false" ;;
+      *) declare -g "${set_var_name}=true" ;;
+      esac
+      BARG_TAKEN_ARGS+=("$((current_value_index - 1))")
+      ;;
+    *)
+      if [[ "${value}" == -* ]]; then
+        [ "${value}" != '--' ] && barg::exit_msg "Param-like value" "Value for {acc}${the_found_flag}{r} looks like an option/flag. Use {str}'-- ${value}'{r} to bypass"
+        value="${argv[current_value_index + 1]}"
+        BARG_TAKEN_ARGS+=("$((current_value_index + 1))")
+      fi
+      if [ "${param_type}" == 'str' ]; then
+        declare -g "${set_var_name}=${value}"
+      else
+        barg::validate_numeric "${value}" "${param_type}"
+        declare -g "${set_var_name}=${value//_/}"
+      fi
+      BARG_TAKEN_ARGS+=("$((current_value_index - 1))" "${current_value_index}")
+      ;;
     esac
   else
-    local _current_indexes=()
-    IFS=' ' read -ra _current_indexes_ <<< "${BARG_ARGV_TABLE["${__short__}"]} ${BARG_ARGV_TABLE["${__long__}"]}"
-    for index in "${_current_indexes[@]}" "${_current_indexes_[@]}"; do
+    IFS=' ' read -ra _any_value_index <<<"${BARG_ARGV_TABLE["${__short__}"]} ${BARG_ARGV_TABLE["${__long__}"]}"
+    for index in "${_any_value_index[@]}"; do
       local value="${argv[index]}"
       [ -z "${value}" ] && continue
       if [[ "${value}" == -* ]]; then
-        [ "${value}" != '--' ] && barg::exit_msg "Param-like value" "Value for '${argv[index - 1]}' looks like an option/flag. Use '-- ${argv[index]}' to bypass"
+        [ "${value}" != '--' ] && barg::exit_msg "Param-like value" "Value for {acc}${argv[index - 1]}{r} looks like an option/flag. Use {str}'-- ${argv[index]}{r} to bypass"
         value="${argv[index + 1]}"
+        BARG_TAKEN_ARGS+=("$((index + 1))")
       fi
       if [ "${param_type}" == 'str' ]; then
         declare -ga "${set_var_name}+=(\"${value}\")"
@@ -318,25 +322,37 @@ function barg::param_set {
         barg::validate_numeric "${value}" "${param_type}"
         declare -ga "${set_var_name}+=(\"${value//_/}\")"
       fi
-      barg::clean_fields "${index}" "$((index - 1))"
+      BARG_TAKEN_ARGS+=("$((index - 1))")
     done
-    unset "_current_indexes"
+    BARG_TAKEN_ARGS+=("${_any_value_index}")
+    unset _any_value_index
   fi
-  unset "BARG_ARGV_TABLE[${__short__}]" "BARG_ARGV_TABLE[${__long__}]"
+
+  unset "BARG_ARGV_TABLE[${the_found_flag}]"
 
   ! barg::var_exists "${set_var_name}" && ${is_required} && barg::exit_msg "Missing required arguments" "${signat} is a required argument"
 
-  [ "${__barg_opts[allow_empty_values]}" != 'true' ] \
-    && ${is_required} \
-    && [ -z "${!set_var_name}" ] \
-    && barg::exit_msg "Missing required arguments" "${signat} has an empty value"
+  [ "${__barg_opts[allow_empty_values]}" != 'true' ] &&
+    ${is_required} &&
+    [ -z "${!set_var_name}" ] &&
+    barg::exit_msg "Missing required arguments" "${signat} has an empty value"
 
   ! barg::var_exists "${set_var_name}" || ! ${check_valid_item} && return
   barg::is_in_arr "${!set_var_name}" "${__valid_items__[@]}" && return
 
-  printf -v items '%s, ' "${__valid_items__[@]:1}"
-  items="${items%,*} or ${__valid_items__[0]}"
+  printf -v items '{acc}%s{r}, ' "${__valid_items__[@]:1}"
+  items="${items% *} or {acc}${__valid_items__[0]}{r}"
   barg::exit_msg "Invalid parameter value" "Argument of ${signat} must be between: ${items}"
+}
+
+function barg::colorize {
+  declare -n string="${1}"
+  string="${string//\{r\}/$'\x1b[0m'}"
+  local res=""
+  while [[ "${string}" =~ \{([a-z_]+)\} ]]; do
+    res="${__barg_palette[${BASH_REMATCH[1]}]:-${BASH_REMATCH[0]}}"
+    string="${string//"${BASH_REMATCH[0]}"/"${res}"}"
+  done
 }
 
 # barg::exit_msg <error type> <error desc>
@@ -349,16 +365,16 @@ function barg::exit_msg {
     "${onerrcb}" "${error_type}" "${error_desc}" && return || exit ${?}
   fi
 
-  local ecolor="${__barg_palette[err]}"
   local toerror="${__barg_opts[use_stderr]}"
   local be_quiet="${__barg_opts[quiet_exit]}"
   local prognam="${__barg_opts[argv_zero]}"
 
-  local __err__="${ecolor}ERROR: ${prognam} -> ${error_type}...\x1b[00m ${error_desc}"
+  local _err_msg="{err}ERROR: ${prognam} -> ${error_type}...{r} ${error_desc}"
+  barg::colorize _err_msg
 
   if [ "${be_quiet}" != 'true' ]; then
-    [ "${toerror}" == 'true' ] && printf '%b\n' "${__err__}" >&2 \
-      || printf '%b\n' "${__err__}"
+    [ "${toerror}" == 'true' ] && printf '%b\n' "${_err_msg}" >&2 ||
+      printf '%b\n' "${_err_msg}"
   fi
 
   exit 1
@@ -371,13 +387,11 @@ function barg::gen_help_message {
   local -n descs="${3}"
   local -n flags="${4}"
 
-  local cltyp="${__barg_palette[typ]}"
+  local clacc="${__barg_palette[acc]}"
   local clcmd="${__barg_palette[cmd]}"
   local clreq="${__barg_palette[req]}"
-  local clacc="${__barg_palette[acc]}"
-  local cldef="${__barg_palette[def]}"
-  local cldsv="${__barg_palette[dsv]}"
-  local cldov="${__barg_palette[dov]}"
+  local clstr="${__barg_palette[str]}"
+  local clany="${__barg_palette[any]}"
 
   local prognam="${__barg_opts[argv_zero]}"
   local __all_subcommands=("${!__barg_subcommands[@]}")
@@ -391,11 +405,12 @@ function barg::gen_help_message {
   elif [ -n "${__barg_opts[summary]}" ]; then
     printf '\x1b[1m%b%s\x1b[0m: %s\n\n' "${clacc}" "${prognam}" "${__barg_opts[summary]}"
   fi
+
   [[ "${__barg_opts[spare_args_required]}" == true || -n "${__barg_subcommands["*${BARG_SUBCOMMAND}"]}" ]] && local __dummy_bool_extras="-"
   printf '%bUsage\x1b[0m:\n %b%s\x1b[0m%s [OPTIONS]%s\n\n' "${clacc}" "${clcmd}" "${prognam,,}" "${scmd_str}" "${__dummy_bool_extras:+ [...]}"
 
   if [ -z "${BARG_SUBCOMMAND}" ] && [[ "${#__all_subcommands[@]}" -gt 0 ]]; then
-    printf "%bAvailable subcommands:\x1b[0m\n" "${clacc}"
+    printf "%bAvailable subcommands\x1b[0m:\n" "${clacc}"
     for sub in "${__all_subcommands[@]}"; do
       printf "  %-16s %s\n" "${sub#\*}" "${__barg_subcommands["${sub}"]}"
     done
@@ -403,13 +418,13 @@ function barg::gen_help_message {
   fi
 
   function __print_flag_line {
-    local optstr=""
+    local optstr="  "
     if [[ -n "${short}" && -n "${long}" ]]; then
-      optstr="  -${short}, --${long}"
+      optstr+="${short}, ${long}"
     elif [[ -n "${short}" ]]; then
-      optstr="  -${short}"
+      optstr+="${short}"
     elif [[ -n "${long}" ]]; then
-      optstr="      --${long}"
+      optstr+="    ${long}"
     fi
 
     if [[ -n "${type}" && "${type}" != "flag" && "${type}" != "switch" ]]; then
@@ -425,20 +440,22 @@ function barg::gen_help_message {
       if [[ "${type}" == "str" ]]; then
         # For strings, limit to 45 chars and add  if needed
         [[ ${#__defaults[i]} -gt 45 ]] && default_str="${default_str:0:44}…"
-        default_str="${cldsv}\"${default_str}\""
+        default_str="${clstr}\"${default_str}\""
       else
         # For nums/bools, show full value
-        default_str="${cldov}${__defaults[i]}"
+        default_str="${clany}${__defaults[i]}"
       fi
-      desc="${desc} (${cldef}def: ${default_str}\x1b[0m)"
+      desc="${desc} (${clacc}def\x1b[0m: ${default_str}\x1b[0m)"
     fi
 
-    printf "%b%-25s\x1b[0m %b%9s\x1b[0m %b\x1b[0m\n" "${is_req:+${clreq}}" "${optstr}" "${cltyp}" "${type}" "${desc}"
+    [ "${type}" == "switch" ] && type="${name}"
+
+    printf "%b%-25s\x1b[0m %b%10s\x1b[0m %b\x1b[0m\n" "${is_req:+${clreq}}" "${optstr}" "${clacc}" "${type}" "${desc}"
   }
 
-  printf '%bOptions:\x1b[0m\n' "${clacc}"
+  printf '%bOptions\x1b[0m:\n' "${clacc}"
 
-  local param="" short="" long="" \
+  local param="" short="" long="" name="" \
     type="" desc="" is_req="" is_vec=""
 
   local count="${#params[@]}"
@@ -450,28 +467,47 @@ function barg::gen_help_message {
     [[ "${flags[i]}" == '!' ]] && is_req='!' || is_req=''
     [[ "${flags[i]}" == 's' ]] && is_vec='s' || is_vec=''
 
-    if [[ "${param:0:1}" != '{' ]]; then
+    short=""
+    long=""
+    if [[ "${param}" != *'}' ]]; then
       param="${param%%\ *}"
-      short="${param%/*}"
-      long="${param#*/}"
-      [ "${short}" == "${long}" ] && short=""
+      if [[ "${param}" == ?'/'* ]]; then
+        short="-${param%/*}"
+        long="--${param#*/}"
+      else
+        (("${#param}" > 1)) && long="--${param}" || short="-${param}"
+      fi
       __print_flag_line
       continue
     fi
 
     param="${param:1:-1}"
-    type="switch"
+    param="${param#*\{}"
+    name="${type}"
     while [[ "${param}" =~ ${__obj_regex__} ]]; do
+      type="switch"
       local short="${BASH_REMATCH[2]}"
       local long="${BASH_REMATCH[3]}"
       local value="${BASH_REMATCH[5]:-${BASH_REMATCH[7]}}"
+      local desc="${BASH_REMATCH[12]:-${BASH_REMATCH[14]:-${desc}}}"
+
+      if [ -n "${short}" ]; then
+        short="-${short:0:-1}"
+        long="--${long}"
+      else
+        (("${#long}" > 1)) && long="--${long}" || {
+          short="-${long}"
+          long=''
+        }
+      fi
+
       __print_flag_line
       param="${param/#"${BASH_REMATCH[0]}"/}"
     done
   done
   param=""
-  short="h"
-  long="help"
+  short="-h"
+  long="--help"
   type="flag"
   desc="Show this help message and exit"
   is_req=""
@@ -480,8 +516,10 @@ function barg::gen_help_message {
   [[ -z "${__barg_opts[epilog_lines]}" || -n "${BARG_SUBCOMMAND}" ]] && return
 
   declare -n epilogs="${__barg_opts[epilog_lines]}"
-  printf '\n'
-  printf '%b\n' "${epilogs[@]//\{acc\}/${clacc}}"
+  local epilog=''
+  IFS=$'\n' epilog="${epilogs[*]}"
+  barg::colorize epilog
+  printf '\n%b\n' "${epilog}"
 }
 
 # barg::dynamic_completion <params[@]> <types[@]> <descs[@]> <extargs[@]>
@@ -509,8 +547,8 @@ function barg::dynamic_completion {
     [ "${__barg_opts[subcommand_required]}" == 'true' ] && {
       if [[ "${__barg_opts[help_enabled]}" == 'true' && "${curr}" == '-'* ]]; then
         local desc="Show this help message and exit"
-        printf -- "--help\t1\t%-9s %s\n" "flag" "${desc}"
-        printf -- "-h\t1\t%-9s %s\n" "flag" "${desc}"
+        printf -- "--help\t1\t%-10s %s\n" "flag" "${desc}"
+        printf -- "-h\t1\t%-10s %s\n" "flag" "${desc}"
       fi
       return
     }
@@ -523,8 +561,8 @@ function barg::dynamic_completion {
   local long_opts=()
   local short_opts=()
   function __print_flag_line {
-    if [[ "${total_args}" != '0' && "--${long}" != "${curr}"* ]]; then
-      [[ -z "${short}" || "-${short}" != "${curr}"* ]] && return
+    if [[ "${total_args}" != '0' && "${long}" != "${curr}"* ]]; then
+      [[ -z "${short}" || "${short}" != "${curr}"* ]] && return
     fi
 
     [ -z "${type}" ] && type="enum"
@@ -539,12 +577,14 @@ function barg::dynamic_completion {
       desc="${desc} (def: \"${def_v}\")"
     fi
 
-    [[ "--" == "${curr:0:2}"* ]] && {
-      printf -v a -- "--%s\t%s\t%-9s %s\n" "${long}" "${color}" "${type}" "${desc}"
+    [ "${type}" == "switch" ] && type="${name}"
+
+    [[ -n "${long}" && "--" == "${curr:0:2}"* ]] && {
+      printf -v a -- "%s\t%s\t%-10s %s\n" "${long}" "${color}" "${type}" "${desc}"
       long_opts+=("${a}")
     }
     [[ -n "${short}" && "${curr}" != --* ]] && {
-      printf -v a -- "-%s\t%s\t%-9s %s\n" "${short}" "${color}" "${type}" "${desc}"
+      printf -v a -- "%s\t%s\t%-10s %s\n" "${short}" "${color}" "${type}" "${desc}"
       short_opts+=("${a}")
     }
   }
@@ -563,25 +603,30 @@ function barg::dynamic_completion {
     [[ "${flags[i]}" == '!' ]] && is_req='!' || is_req=''
     [[ "${flags[i]}" == 's' ]] && is_vec='s' || is_vec=''
 
-    if [[ "${param:0:1}" != '{' ]]; then
+    short=""
+    long=""
+    if [[ "${param}" != *'}' ]]; then
       param="${param%%\ *}"
-      short="${param%/*}"
-      long="${param#*/}"
-      [ "${short}" == "${long}" ] && short=""
+      if [[ "${param}" == ?'/'* ]]; then
+        short="-${param%/*}"
+        long="--${param#*/}"
+      else
+        (("${#param}" > 1)) && long="--${param}" || short="-${param}"
+      fi
 
-      if [ -z "${type}" ] && [[ "${prev}" == "-${short}" || "${prev}" == "--${long}" ]]; then
+      if [[ -z "${type}" && -n "${prev}" ]] && [[ "${prev}" == "${short}" || "${prev}" == "${long}" ]]; then
         local maybe_checked_list="${params[i]#*\ }" # [...]
         local STR="${maybe_checked_list:1:-1}"
         while [[ "${STR}" =~ ${__lst_regex__} ]]; do
           local value="${BASH_REMATCH[2]:-${BASH_REMATCH[4]}}"
-          [[ "${value}" == "${curr}"* ]] && printf '%s\t3\t%9s %s\n' "${value}" "enum" "value for ${prev}"
+          [[ "${value}" == "${curr}"* ]] && printf '%s\t3\t%10s %s\n' "${value}" "enum" "value for ${prev}"
           STR="${STR/#"${BASH_REMATCH[0]}"/}"
         done
         exit
       fi
 
-      for cci in "${argv[@]:0:$((total_args - 1))}"; do
-        [[ "${cci}" == "-${short}" || "${cci}" == "--${long}" ]] && continue 2
+      for cur_arg in "${argv[@]:0:$((total_args - 1))}"; do
+        [[ "${cur_arg}" == "${short}" || "${cur_arg}" == "${long}" ]] && continue 2
       done
 
       __print_flag_line
@@ -589,16 +634,29 @@ function barg::dynamic_completion {
     fi
 
     param="${param:1:-1}"
-    type="switch"
+    param="${param#*\{}"
+    name="${type}"
     local lopt_count="${#long_opts[@]}"
     local sopt_count="${#short_opts[@]}"
     while [[ "${param}" =~ ${__obj_regex__} ]]; do
+      type="switch"
       local short="${BASH_REMATCH[2]}"
       local long="${BASH_REMATCH[3]}"
       local value="${BASH_REMATCH[5]:-${BASH_REMATCH[7]}}"
+      local desc="${BASH_REMATCH[12]:-${BASH_REMATCH[14]:-${desc}}}"
 
-      for cci in "${argv[@]:0:$((total_args - 1))}"; do
-        [[ "${cci}" == "-${short}" || "${cci}" == "--${long}" ]] && {
+      if [ -n "${short}" ]; then
+        short="-${short:0:-1}"
+        long="--${long}"
+      else
+        (("${#long}" > 1)) && long="--${long}" || {
+          short="-${long}"
+          long=''
+        }
+      fi
+
+      for cur_arg in "${argv[@]:0:$((total_args - 1))}"; do
+        [[ "${cur_arg}" == "${short}" || "${cur_arg}" == "${long}" ]] && {
           long_opts=("${long_opts[@]:0:lopt_count}")
           short_opts=("${short_opts[@]:0:sopt_count}")
           break 2
@@ -613,8 +671,8 @@ function barg::dynamic_completion {
   # in the main function, -h/--help was already found or not
   if ! ${help_message_generation} && [ "${__barg_opts[help_enabled]}" == 'true' ]; then
     param=""
-    short="h"
-    long="help"
+    short="-h"
+    long="--help"
     type="flag"
     desc="Show this help message and exit"
     is_req=""
@@ -668,6 +726,7 @@ function barg::parse {
   fi
 
   # shellcheck disable=SC1003
+  local __str_regex__='("((\\"|[^"])*?)"|'\''((\\'\''|[^'\''])*?)'\'')'
   local __val_regex__='("((\\"|[^"])*?)"|'\''((\\'\''|[^'\''])*?)'\''|(-?[0-9]+|true|false))'
   local __arg_pattern__='[A-Za-z!?@#_.:<>]?/?[A-Za-z0-9!?@#_.:<>\-]+'
 
@@ -677,13 +736,13 @@ function barg::parse {
   local __flt_regex__='^(-?[0-9]{1,3}(_[0-9]{3})+\.([0-9]{3}(_[0-9]{1,3})*|[0-9]{1,3})|-?[0-9]+\.[0-9]+)$'
   local __opt_regex__="meta \{((\s*([\*A-Za-z_][A-Za-z0-9_-]+)\s*:\s*${__val_regex__}\s*)+)\}"
   local __obi_regex__="\s*([\*A-Za-z_][A-Za-z0-9_-]+)\s*:\s*${__val_regex__}\s*"
-  local __obj_regex__="\s*(([A-Za-z!?@#_.:<>]?)/?([A-Za-z0-9!?@#_.:<>\-]+)\s*:\s*${__val_regex__})\s*"
+  local __obj_regex__="\s*(([A-Za-z!?@#_.:<>]/)?([A-Za-z0-9!?@#_.:<>\-]+)\s*:\s*${__val_regex__})\s*(h${__str_regex__})?"
   local __lst_regex__="\s*${__val_regex__}\s*"
   local __def_regex__=(
     '\s*(@[a-zA-Z0-9\-_]*)?\s*(!)?\s*'
     "(${__arg_pattern__}\s+:(str|float|int|num|flag)(s)?"
-    "|\{(\s*${__arg_pattern__}\s*:\s*${__val_regex__}\s*)+\}"
-    "|\s*${__arg_pattern__}\s*\[(\s*\s*${__val_regex__}\s*)+\])"
+    "|(\"((\\\\\"|[^\"])*?)\")?\s*\{(\s*${__arg_pattern__}\s*:\s*${__val_regex__}\s*(h\"((\\\"|[^\"])*?)\")?\s*)+\}"
+    "|${__arg_pattern__}\s*\[(\s*\s*${__val_regex__}\s*)+\])"
     "\s*${__val_regex__}?\s*"
     '=>\s*([a-zA-Z][a-zA-Z0-9_]*)'
     "\s*${__val_regex__}?"
@@ -713,7 +772,7 @@ function barg::parse {
       local key="${BASH_REMATCH[1]}"
       local val="${BASH_REMATCH[3]:-${BASH_REMATCH[5]:-${BASH_REMATCH[7]}}}"
       if [[ " ${!__barg_opts[*]} " != *" ${key} "* ]]; then
-        barg::exit_msg "Invalid option" "Option '${key}' does not exist"
+        barg::exit_msg "Invalid option" "Option {acc}${key}{r} does not exist"
       fi
       __barg_opts[${key}]="${val}"
       obj="${obj/#"${BASH_REMATCH[0]//\\/\\\\}"/}"
@@ -733,19 +792,17 @@ function barg::parse {
     unset key val obj
   fi
 
-  [ -n "${__barg_opts[color_palette]}" ] && {
-    mapfile -t palette <<< "${__barg_opts[color_palette]//:/$'\n'}"
+  local palette="${__barg_opts[color_palette]:-${BARG_COLOR_PALETTE}}"
+  [ -n "${palette}" ] && {
+    mapfile -t palette <<<"${palette//:/$'\n'}"
     __barg_palette[acc]="\x1b[${palette[0]:-0}m"
-    __barg_palette[err]="\x1b[${palette[1]:-0}m"
-    __barg_palette[hil]="\x1b[${palette[2]:-0}m"
-    __barg_palette[cmd]="\x1b[${palette[3]:-0}m"
-    __barg_palette[req]="\x1b[${palette[4]:-0}m"
-    __barg_palette[typ]="\x1b[${palette[5]:-0}m"
-    __barg_palette[def]="\x1b[${palette[6]:-0}m"
-    __barg_palette[dsv]="\x1b[${palette[7]:-0}m"
-    __barg_palette[dov]="\x1b[${palette[8]:-0}m"
-    unset palette
+    __barg_palette[cmd]="\x1b[${palette[1]:-0}m"
+    __barg_palette[req]="\x1b[${palette[2]:-0}m"
+    __barg_palette[err]="\x1b[${palette[3]:-0}m"
+    __barg_palette[str]="\x1b[${palette[4]:-0}m"
+    __barg_palette[any]="\x1b[${palette[5]:-0}m"
   }
+  unset palette
 
   local help_or_completion=false
   local completion_mode=''
@@ -800,10 +857,12 @@ function barg::parse {
   if ! ${help_or_completion} && ${__missing_subcmd}; then
     # shellcheck disable=SC2206
     local __all_subcommands=("${!__barg_subcommands[@]}")
+    local lines=()
     for sub in "${__all_subcommands[@]}"; do
-      printf -v subcmds_s "%s\n  - \x1b[38;5;4m%-16s\x1b[0m %s" "${subcmds_s}" "${sub#\*}" "${__barg_subcommands["${sub}"]}"
+      lines+=("${sub#\*}" "${__barg_subcommands["${sub}"]}")
     done
-    barg::exit_msg "Missing subcommand" "A subcommand is required, one of:${subcmds_s}"
+    printf -v plines "  - {acc}%-16s{r} %s\n" "${lines[@]}"
+    barg::exit_msg "Missing subcommand" "A subcommand is required, one of:\n${plines:0:-1}"
   fi
 
   local -a __signatures=()
@@ -817,7 +876,7 @@ function barg::parse {
     STDIN_STR="${STDIN_STR/#"${BASH_REMATCH[0]}"/}"
 
     if [ "${BASH_REMATCH[0]}" == "${__last_valid_param_def}" ]; then
-      barg::exit_msg "Invalid directive" "Not able to continue, error before: ${__last_valid_param_def}"
+      barg::exit_msg "Invalid directive" "Not able to continue, error before: \n${__last_valid_param_def}"
     fi
     __last_valid_param_def="${BASH_REMATCH[0]}"
 
@@ -832,14 +891,15 @@ function barg::parse {
     local param_pattern="${BASH_REMATCH[3]}"                                              # !-> Pattern
     local param_type="${BASH_REMATCH[4]}"                                                 # ?-> Data type
     local param_is_vec="${BASH_REMATCH[5]}"                                               # ?-> is a vec
-    local param_def_value="${BASH_REMATCH[21]:-${BASH_REMATCH[23]:-${BASH_REMATCH[25]}}}" # ?-> Default value
-    local param_var_name="${BASH_REMATCH[26]}"                                            # !-> Variable name
-    local param_help_desc="${BASH_REMATCH[28]:-${BASH_REMATCH[30]}}"                      # ?-> Def description
+    local param_switch="${BASH_REMATCH[7]}"                                               # ?-> Switch name
+    local param_def_value="${BASH_REMATCH[27]:-${BASH_REMATCH[29]:-${BASH_REMATCH[31]}}}" # ?-> Default value
+    local param_var_name="${BASH_REMATCH[32]}"                                            # !-> Variable name
+    local param_help_desc="${BASH_REMATCH[34]:-${BASH_REMATCH[36]}}"                      # ?-> Def description
 
-    barg::is_in_arr "${param_var_name}" "${__ilegal_var_names__[@]}" && barg::exit_msg "Ilegal variable name" "${param_var_name} is a reserved variable name."
+    barg::is_in_arr "${param_var_name}" "${__ilegal_var_names__[@]}" && barg::exit_msg "Ilegal variable name" "{acc}${param_var_name}{r} is a reserved variable name."
 
     __signatures+=("${param_pattern}")
-    __types+=("${param_type}")
+    __types+=("${param_type:-${param_switch}}")
     __variables+=("${param_var_name}")
     __defaults+=("${param_def_value}")
     __flags+=("${param_is_req}${param_is_vec}")
@@ -858,17 +918,17 @@ function barg::parse {
   fi
 
   case "${completion_mode}" in
-    '@nucomp')
-      barg::dynamic_completion \
-        "__signatures" "__types" "__descriptions" "__flags" "${argv[@]}" \
-        | barg::nucompletion_adapter
-      exit
-      ;;
-    '@tsvcomp')
-      barg::dynamic_completion \
-        "__signatures" "__types" "__descriptions" "__flags" "${argv[@]}"
-      exit
-      ;;
+  '@nucomp')
+    barg::dynamic_completion \
+      "__signatures" "__types" "__descriptions" "__flags" "${argv[@]}" |
+      barg::nucompletion_adapter
+    exit
+    ;;
+  '@tsvcomp')
+    barg::dynamic_completion \
+      "__signatures" "__types" "__descriptions" "__flags" "${argv[@]}"
+    exit
+    ;;
   esac
 
   if ${help_message_generation}; then
@@ -881,38 +941,49 @@ function barg::parse {
   declare -Ag BARG_ARGV_TABLE
 
   local i=0
-  local _flag=''
+  local _last_argv=''
   while ((i < ${#argv[@]})); do
+    # skip what is not meant to be flags
+    # -- -some other
+    # ++ ++++ ^
     [[ "${argv[i]}" == '--' ]] && {
       ((i = i + 2))
       continue
     }
+    # skip what does not look like flag
+    # maybe --this
+    # +++++ ^
     [[ "${argv[i]}" != -* ]] && {
       ((i++))
       continue
     }
 
-    _flag="${argv[i]}"
+    # push flag, and where a possible value is
+    # not skipping value since flag may not use it
+    _last_argv="${argv[i]}"
     ((i++))
 
-    [ -z "${BARG_ARGV_TABLE["${_flag}"]}" ] \
-      && BARG_ARGV_TABLE["${_flag}"]="${i}" \
-      || BARG_ARGV_TABLE["${_flag}"]+=" ${i}"
+    # always append, since a leading space does not
+    # make any changes, but the [ -z "${...}" ] does
+    BARG_ARGV_TABLE["${_last_argv}"]+=" ${i}"
   done
 
-  local clhil="${__barg_palette[hil]}"
-  ((${#argv[@]} > 0)) && [[ "${_flag}" == "${argv[-1]}" || "${argv[-1]}" == '--' ]] && ((i >= ${#argv[@]})) && {
-    local _pf="${_flag#*"${_flag%%[!-]*}"}"
-    ((${#_pf} == 1)) && _pf+="/"
-    for i in "${!__signatures[@]}"; do
-      [[ "${__signatures[i]}" == *"${_pf}"* ]] && {
-        [[ -n "${__types[i]}" && "${__types[i]}" != 'flag' ]] \
-          && barg::exit_msg "Missing value" "Expected value for ${clhil}${_flag}\x1b[0m is not in command line"
-        break
-      }
-    done
-  }
-  unset i _flag _pf
+  # in case of finding a flag at the end, and it expects a value, which is missing
+  # if ((${#argv[@]} > 0)) && [[ "${argv[-1]}" == '-'* ]] && [ -n "${_last_argv}" ]; then
+  #   local _maybe_flag="${_last_argv#*"${_last_argv%%[!-]*}"}"
+  #   ((${#_maybe_flag} == 1)) && _maybe_flag+="/"
+  #
+  #   for i in "${!__signatures[@]}"; do
+  #     echo [[ "${__signatures[i]}" == *"${_maybe_flag}"* ]]
+  #     [[ "${__signatures[i]}" == *"${_maybe_flag}"* ]] && {
+  #       [[ -n "${__types[i]}" && "${__types[i]}" != 'flag' ]] && {
+  #         barg::exit_msg "Missing value" "Expected value for {acc}${_last_argv}{r} is not in command line"
+  #       }
+  #       break
+  #     }
+  #   done
+  # fi
+  # unset i _last_argv _maybe_flag
 
   local count="${#__variables[@]}"
   for ((i = 0; i < count; i++)); do
@@ -924,17 +995,15 @@ function barg::parse {
   local i=0
   declare -ag "${extras_var_name}"
   for ((i = 0; i < ${#argv[@]}; i++)); do
-    if [[ "${argv[i]}" != '--' ]]; then
-      for j in "${BARG_TAKEN_ARGS[@]}"; do
-        ((i == j)) && continue 2
-      done
-      local arg="${argv[i]}"
-      if [[ "${arg}" == -* ]]; then
-        barg::exit_msg "Unknown flag" "Flag '${clhil}${arg}\x1b[0m' is not recognized"
-      fi
-    else
+    # options and flags are taken, so skip them
+    [[ " ${BARG_TAKEN_ARGS[*]} " == *"${i}"* ]] && continue
+
+    local arg="${argv[i]}"
+    if [[ "${arg}" == '--' ]]; then
       ((i++))
-      local arg="${argv[i]}"
+      arg="${argv[i]}"
+    elif [[ "${arg}" == -* ]]; then
+      barg::exit_msg "Unknown flag" "Flag {acc}${arg}{r} is not recognized"
     fi
 
     declare -ag "${extras_var_name}+=(\"${arg//\"/\\\"}\")"
@@ -946,9 +1015,10 @@ function barg::parse {
   declare -g "${extras_var_name}_COUNT"="${extras_count}"
 
   if ((extras_count < 1)); then
-    if [[ -z "${BARG_SUBCOMMAND}" && "${__barg_opts[spare_args_required]}" == 'true' ]] \
-      || [[ -n "${BARG_SUBCOMMAND}" && "${BARG_SUBCOMMAND_NEEDS_SPARE}" == 'true' ]]; then
+    if [[ -z "${BARG_SUBCOMMAND}" && "${__barg_opts[spare_args_required]}" == 'true' ]]; then
       barg::exit_msg "Missing arguments" "spare arguments are required"
+    elif [[ -n "${BARG_SUBCOMMAND}" && "${BARG_SUBCOMMAND_NEEDS_SPARE}" == 'true' ]]; then
+      barg::exit_msg "Missing arguments" "subcommand {acc}${BARG_SUBCOMMAND}{r} requires spare arguments"
     fi
   fi
   return 0

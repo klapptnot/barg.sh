@@ -8,7 +8,7 @@
 
 ## ✨ Features
 
-- **⚡ Lightning Fast**: Sub-20ms parsing with zero subshells
+- **⚡ Lightning Fast**: Sub-30ms parsing with zero subshells
 - **🎨 Beautiful Help**: Auto-generated help with colors and formatting
 - **🔧 Rich Types**: Support for strings, integers, floats, flags, vectors, and choice validation
 - **📦 Zero Dependencies**: Pure bash with only built-in commands
@@ -82,8 +82,9 @@ The (abstract and) basic syntax form is the following:
 ```bnf
 declaration ::= <scope>? "!"? <option> <type>? <default>? "=>" <var> <desc>?
 scope ::= "@" <identifier>?
-option ::= <short>? <long> | <long> | "{" {<entries>} "}" | "[" {<value>} "]"
-entries ::= <short>? <long> ":" <string>
+option ::= <short>? <long> | <long> | <string>? "{" <entries> "}" | "[" <value> "]"
+entries ::= <short>? <long> ":" <string> <help>
+help ::= "h" <string>
 value ::= <string> | <number> | <boolean>
 short ::= <char> "/"
 type ::= ":" (("str" | "int" | "num" | "float") "s"? | "flag" )
@@ -153,10 +154,10 @@ Switches are mutually exclusive option groups where selecting one sets a specifi
 ```bash
 # Required mode switch - no default value will be set, error if missing
 # The value at the right will be set to the variable name (OP_MODE)
-! {
-  l/list: "list"
-  g/get: "download"
-  r/remove: "remove"
+! "work-more" {
+  l/list: "list" h"List stuff"
+  g/get: "download" h"Download stuff"
+  r/remove: "remove" h"Remove stuff"
 } => OP_MODE
 
 # COLOR will contain the respective color for --red, --green, or --blue, or default to white
@@ -190,7 +191,7 @@ let carapace_completer = {|spans|
 # Get tab-separated completions
 # Easy to setup for your default shell
 myapp @tsvcomp myapp --verb
-# Output format: <option>\t<color_code>\t<type>\t<description>
+# Output format: <option>\t<color_code>\t<description>
 ```
 
 **Purpose**: TSV format is designed for users to create their own shell compatibility layers. Only Nushell has official built-in support due to its rich completions features.
@@ -201,9 +202,9 @@ _my_app_completion() {
   local cur prev words cword
   _init_completion || return
 
-  # TSV output: <value>\t<color>\t<type>\t<desc>
+  # TSV output: <value>\t<color>\t<desc>
   mapfile -t COMPREPLY < <(my-app @tsvcomp "${words[@]}")
-  
+
   # Bash (readline) doesn't support descriptions natively
   # Keep full TSV line until selected, then extract just the value
   if [[ "${#COMPREPLY[@]}" == 1 ]]; then
@@ -250,7 +251,7 @@ ERROR: myapp -> Missing subcommand... A subcommand is required, one of:
   - ping    Ping multiple hosts
 
 $ myapp --level invalid # Invalid choice
-ERROR: myapp -> Invalid parameter value... Argument of `--level` must be between: debug, info, warn or error
+ERROR: myapp -> Invalid parameter value... Argument of --level must be between: debug, info, warn, or error
 ```
 
 These behaviors can be customized:
@@ -363,9 +364,9 @@ The `meta` block configures global behavior:
 
 ### Customization
 
-- **color_palette**: Error message color scheme, use `::::::::::` for no colors (default: empty)
-  - Example: `color_palette: "38;5;9:38;5;50:38;5;122:38;5;230:38;5;231:38;5;203:38;5;87:38;5;85:38;5;230"`
-  - Format: `acc:err:hil:cmd:req:typ:def:dsv:dov` (9 color codes)
+- **color_palette**: Error message color scheme, use `:` for no colors (default: empty)
+  - Example: `color_palette: "38;5;9:38;5;50:38;5;230:38;5;203:38;5;85:38;5;230"`
+  - Format: `acc:cmd:req:err:str:any` (6 color codes)
 
 - **on_error**: Function name to call on error (default: `""`)
   - Example: `on_error: "on_args_err"`
@@ -397,26 +398,24 @@ BARG
 
 ## 🎨 Color Customization
 
-Customize colors using colon-separated ANSI codes (9 total):
+Can be customized globally using the env-val `BARG_COLOR_PALETTE` with the colon-separated values, but the `color_palette` property has priority.
+Customize colors using colon-separated ANSI codes (6 total):
 
 ```bash
 meta {
-  color_palette: '38;5;9:38;5;50:38;5;122:38;5;230:38;5;231:38;5;203:38;5;87:38;5;85:38;5;230'
+  color_palette: '38;5;9:38;5;50:38;5;122:38;5;203:38;5;85:38;5;230'
 }
 ```
 
 Color mapping (in order):
-1. `acc`: Accents for help message headings
-2. `err`: Error message colors
-3. `hil`: Highlighting for flag patterns
-4. `cmd`: Command/program name color in help
-5. `req`: Required flags color in help
-6. `typ`: Type annotations in help (`<str>`, `[int]`)
-7. `def`: Word "def" color before default values
-8. `dsv`: String default values color
-9. `dov`: Other default values color (numbers, booleans)
+1. `acc`: Accents for help message, types, highlights
+2. `cmd`: Command/program name color in help
+3. `req`: Required flags color in help
+4. `err`: Error message colors
+5. `str`: String default values color
+6. `any`: Other default values color (numbers, booleans)
 
-To disable colors completely: `palette: ":::::::::"`
+To disable colors completely: `palette: ":"`
 
 ## ⚡ Performance
 
@@ -467,13 +466,14 @@ BARG
 
 # Validation
 [[ -n "$FILES" && -n "$DIR" ]] &&
-  barg::exit_msg "Conflicting options" "Cannot use both --files and --directory"
+  barg::exit_msg "Conflicting options" "Cannot use both {acc}--files{r} and {acc}--directory{r}"
 
 [[ -z "$FILES" && -z "$DIR" ]] &&
-  barg::exit_msg "Missing input" "Either --files or --directory is required"
+  barg::exit_msg "Missing input" "Either {acc}--files{r} or {acc}--directory{r} is required"
+
+barg::unload
 
 # Your processing logic here
-barg::unload
 ```
 
 </details>
@@ -510,6 +510,7 @@ t/timeout :int 5 => TIMEOUT "Timeout in seconds"
 @ping c/count :int 4 => PING_COUNT "Number of pings"
 @ping i/interval :str 1 => PING_INTERVAL "Interval between pings"
 BARG
+barg::unload
 
 # Execute based on subcommand
 case "$BARG_SUBCOMMAND" in
@@ -523,8 +524,6 @@ case "$BARG_SUBCOMMAND" in
     echo "Running traceroute with ${TIMEOUT}s timeout"
     ;;
 esac
-
-barg::unload
 ```
 
 </details>
@@ -538,11 +537,11 @@ source barg.sh
 
 EPILOG_TEXT=(
   ""
-  "{acc}Examples:{acc}"
+  "{acc}Examples{r}:"
   "  myapp -v process file1.txt file2.txt"
   "  myapp --format json --output results/ *.txt"
   ""
-  "{acc}For more information, visit: https://example.com{acc}"
+  "{acc}For more information, visit: https://example.com{r}"
 )
 
 barg::parse "${@}" << BARG
