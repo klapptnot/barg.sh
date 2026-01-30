@@ -275,7 +275,7 @@ function barg::param_set {
   fi
 
   # it's supposed to not be found to set default value here
-  BARG_ARGV_TABLE["${set_var_name}"]="!"
+  BARG_ARGV_TABLE["${set_var_name}"]="${the_found_flag}"
 
   # take last value as valid
   local current_value_index="${BARG_ARGV_TABLE[${the_found_flag}]##*\ }"
