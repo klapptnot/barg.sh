@@ -90,7 +90,7 @@ function barg::nucompletion_adapter {
 }
 
 function barg::var_exists {
-  declare -p "${1}" &>/dev/null
+  declare -p "${1}" &> /dev/null
 }
 
 function barg::is_in_arr {
@@ -145,18 +145,18 @@ function barg::validate_numeric {
   local type_name=""
 
   case "${type}" in
-  'num')
-    regex="${__num_regex__}"
-    type_name="int{r} or {acc}float"
-    ;;
-  'int')
-    regex="${__int_regex__}"
-    type_name="integer"
-    ;;
-  'float')
-    regex="${__flt_regex__}"
-    type_name="float"
-    ;;
+    'num')
+      regex="${__num_regex__}"
+      type_name="int{r} or {acc}float"
+      ;;
+    'int')
+      regex="${__int_regex__}"
+      type_name="integer"
+      ;;
+    'float')
+      regex="${__flt_regex__}"
+      type_name="float"
+      ;;
   esac
 
   if ! [[ "${value}" =~ ${regex} ]]; then
@@ -263,8 +263,8 @@ function barg::param_set {
     ${is_required} && barg::exit_msg "Missing required arguments" "${signat} is a required argument"
     if [ "${param_type}" == "flag" ]; then
       case "${def_value}" in
-      'true' | 'false') declare -g "${set_var_name}=${def_value}" ;;
-      *) declare -g "${set_var_name}=false" ;;
+        'true' | 'false') declare -g "${set_var_name}=${def_value}" ;;
+        *) declare -g "${set_var_name}=false" ;;
       esac
     elif ${is_vec_list}; then
       declare -ag "${set_var_name}=()"
@@ -284,30 +284,30 @@ function barg::param_set {
   if ! ${is_vec_list}; then
     local value="${argv[current_value_index]}"
     case "${param_type}" in
-    'flag')
-      case "${def_value}" in
-      'true') declare -g "${set_var_name}=false" ;;
-      *) declare -g "${set_var_name}=true" ;;
-      esac
-      BARG_TAKEN_ARGS+=("$((current_value_index - 1))")
-      ;;
-    *)
-      if [[ "${value}" == -* ]]; then
-        [ "${value}" != '--' ] && barg::exit_msg "Param-like value" "Value for {acc}${the_found_flag}{r} looks like an option/flag. Use {str}'-- ${value}'{r} to bypass"
-        value="${argv[current_value_index + 1]}"
-        BARG_TAKEN_ARGS+=("$((current_value_index + 1))")
-      fi
-      if [ "${param_type}" == 'str' ]; then
-        declare -g "${set_var_name}=${value}"
-      else
-        barg::validate_numeric "${value}" "${param_type}"
-        declare -g "${set_var_name}=${value//_/}"
-      fi
-      BARG_TAKEN_ARGS+=("$((current_value_index - 1))" "${current_value_index}")
-      ;;
+      'flag')
+        case "${def_value}" in
+          'true') declare -g "${set_var_name}=false" ;;
+          *) declare -g "${set_var_name}=true" ;;
+        esac
+        BARG_TAKEN_ARGS+=("$((current_value_index - 1))")
+        ;;
+      *)
+        if [[ "${value}" == -* ]]; then
+          [ "${value}" != '--' ] && barg::exit_msg "Param-like value" "Value for {acc}${the_found_flag}{r} looks like an option/flag. Use {str}'-- ${value}'{r} to bypass"
+          value="${argv[current_value_index + 1]}"
+          BARG_TAKEN_ARGS+=("$((current_value_index + 1))")
+        fi
+        if [ "${param_type}" == 'str' ]; then
+          declare -g "${set_var_name}=${value}"
+        else
+          barg::validate_numeric "${value}" "${param_type}"
+          declare -g "${set_var_name}=${value//_/}"
+        fi
+        BARG_TAKEN_ARGS+=("$((current_value_index - 1))" "${current_value_index}")
+        ;;
     esac
   else
-    IFS=' ' read -ra _any_value_index <<<"${BARG_ARGV_TABLE["${__short__}"]} ${BARG_ARGV_TABLE["${__long__}"]}"
+    IFS=' ' read -ra _any_value_index <<< "${BARG_ARGV_TABLE["${__short__}"]} ${BARG_ARGV_TABLE["${__long__}"]}"
     for index in "${_any_value_index[@]}"; do
       local value="${argv[index]}"
       [ -z "${value}" ] && continue
@@ -332,10 +332,10 @@ function barg::param_set {
 
   ! barg::var_exists "${set_var_name}" && ${is_required} && barg::exit_msg "Missing required arguments" "${signat} is a required argument"
 
-  [ "${__barg_opts[allow_empty_values]}" != 'true' ] &&
-    ${is_required} &&
-    [ -z "${!set_var_name}" ] &&
-    barg::exit_msg "Missing required arguments" "${signat} has an empty value"
+  [ "${__barg_opts[allow_empty_values]}" != 'true' ] \
+    && ${is_required} \
+    && [ -z "${!set_var_name}" ] \
+    && barg::exit_msg "Missing required arguments" "${signat} has an empty value"
 
   ! barg::var_exists "${set_var_name}" || ! ${check_valid_item} && return
   barg::is_in_arr "${!set_var_name}" "${__valid_items__[@]}" && return
@@ -373,8 +373,8 @@ function barg::exit_msg {
   barg::colorize _err_msg
 
   if [ "${be_quiet}" != 'true' ]; then
-    [ "${toerror}" == 'true' ] && printf '%b\n' "${_err_msg}" >&2 ||
-      printf '%b\n' "${_err_msg}"
+    [ "${toerror}" == 'true' ] && printf '%b\n' "${_err_msg}" >&2 \
+      || printf '%b\n' "${_err_msg}"
   fi
 
   exit 1
@@ -531,7 +531,8 @@ function barg::dynamic_completion {
   local -n types="${2}"
   local -n descs="${3}"
   local -n flags="${4}"
-  shift 4
+  local -n vars="${5}"
+  shift 5
 
   local curr=""
   local total_args="${#argv[@]}"
@@ -617,10 +618,14 @@ function barg::dynamic_completion {
       if [[ -z "${type}" && -n "${prev}" ]] && [[ "${prev}" == "${short}" || "${prev}" == "${long}" ]]; then
         local maybe_checked_list="${params[i]#*\ }" # [...]
         local STR="${maybe_checked_list:1:-1}"
+        declare -n item_labels="BARG_ENUM_LABELS_${vars[i]}"
+        local j=0
+        curr="${curr,,}"
         while [[ "${STR}" =~ ${__lst_regex__} ]]; do
           local value="${BASH_REMATCH[2]:-${BASH_REMATCH[4]}}"
-          [[ "${value}" == "${curr}"* ]] && printf '%s\t3\t%10s %s\n' "${value}" "enum" "value for ${prev}"
+          [[ "${value,,}" == "${curr}"* || "${item_labels[j],,}" == "${curr}"* ]] && printf '%s\t3\t%10s %s\n' "${value}" "enum" "${item_labels[j]:-"value for ${prev}"}"
           STR="${STR/#"${BASH_REMATCH[0]}"/}"
+          ((j++))
         done
         exit
       fi
@@ -794,7 +799,7 @@ function barg::parse {
 
   local palette="${__barg_opts[color_palette]:-${BARG_COLOR_PALETTE}}"
   [ -n "${palette}" ] && {
-    mapfile -t palette <<<"${palette//:/$'\n'}"
+    mapfile -t palette <<< "${palette//:/$'\n'}"
     __barg_palette[acc]="\x1b[${palette[0]:-0}m"
     __barg_palette[cmd]="\x1b[${palette[1]:-0}m"
     __barg_palette[req]="\x1b[${palette[2]:-0}m"
@@ -918,17 +923,17 @@ function barg::parse {
   fi
 
   case "${completion_mode}" in
-  '@nucomp')
-    barg::dynamic_completion \
-      "__signatures" "__types" "__descriptions" "__flags" "${argv[@]}" |
-      barg::nucompletion_adapter
-    exit
-    ;;
-  '@tsvcomp')
-    barg::dynamic_completion \
-      "__signatures" "__types" "__descriptions" "__flags" "${argv[@]}"
-    exit
-    ;;
+    '@nucomp')
+      barg::dynamic_completion \
+        "__signatures" "__types" "__descriptions" "__flags" "__variables" "${argv[@]}" \
+        | barg::nucompletion_adapter
+      exit
+      ;;
+    '@tsvcomp')
+      barg::dynamic_completion \
+        "__signatures" "__types" "__descriptions" "__flags" "__variables" "${argv[@]}"
+      exit
+      ;;
   esac
 
   if ${help_message_generation}; then
