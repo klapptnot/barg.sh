@@ -67,7 +67,7 @@ function barg::nucompletion_adapter {
     xterm_violet         # for subcommands
     xterm_lightsteelblue # for optional params
     xterm_hotpinka       # for required params
-    xterm_plum2          # for enum value
+    xterm_plum2          # for set value
   )
   local s='' res=() o="${IFS}"
   while IFS=$'\t\n' read -r value color desc; do
@@ -448,9 +448,9 @@ function barg::gen_help_message {
       desc="${desc} (${clacc}def\x1b[0m: ${default_str}\x1b[0m)"
     fi
 
-    [ "${type}" == "switch" ] && type="${name}"
+    [ "${type}" == "switch" ] && type="*${name}"
 
-    printf "%b%-25s\x1b[0m %b%10s\x1b[0m %b\x1b[0m\n" "${is_req:+${clreq}}" "${optstr}" "${clacc}" "${type}" "${desc}"
+    printf "%b%-24s\x1b[0m %b%11s\x1b[0m %b\x1b[0m\n" "${is_req:+${clreq}}" "${optstr}" "${clacc}" "${type:-*set}" "${desc}"
   }
 
   printf '%bOptions\x1b[0m:\n' "${clacc}"
@@ -566,7 +566,7 @@ function barg::dynamic_completion {
       [[ -z "${short}" || "${short}" != "${curr}"* ]] && return
     fi
 
-    [ -z "${type}" ] && type="enum"
+    [ -z "${type}" ] && type="*set"
     [ -n "${is_vec}" ] && type="[${type}]"
     local color=1
     [ -n "${is_req}" ] && color=2
@@ -618,12 +618,12 @@ function barg::dynamic_completion {
       if [[ -z "${type}" && -n "${prev}" ]] && [[ "${prev}" == "${short}" || "${prev}" == "${long}" ]]; then
         local maybe_checked_list="${params[i]#*\ }" # [...]
         local STR="${maybe_checked_list:1:-1}"
-        declare -n item_labels="BARG_ENUM_LABELS_${vars[i]}"
+        declare -n item_labels="BARG_SET_LABELS_${vars[i]}"
         local j=0
         curr="${curr,,}"
         while [[ "${STR}" =~ ${__lst_regex__} ]]; do
           local value="${BASH_REMATCH[2]:-${BASH_REMATCH[4]}}"
-          [[ "${value,,}" == "${curr}"* || "${item_labels[j],,}" == "${curr}"* ]] && printf '%s\t3\t%10s %s\n' "${value}" "enum" "${item_labels[j]:-"value for ${prev}"}"
+          [[ "${value,,}" == "${curr}"* || "${item_labels[j],,}" == "${curr}"* ]] && printf '%s\t3\t%11s %s\n' "${value}" "*set" "${item_labels[j]:-"value for ${prev}"}"
           STR="${STR/#"${BASH_REMATCH[0]}"/}"
           ((j++))
         done
@@ -747,7 +747,7 @@ function barg::parse {
     '\s*(@[a-zA-Z0-9\-_]*)?\s*(!)?\s*'
     "(${__arg_pattern__}\s+:(str|float|int|num|flag)(s)?"
     "|(\"((\\\\\"|[^\"])*?)\")?\s*\{(\s*${__arg_pattern__}\s*:\s*${__val_regex__}\s*(h\"((\\\"|[^\"])*?)\")?\s*)+\}"
-    "|${__arg_pattern__}\s*\[(\s*\s*${__val_regex__}\s*)+\])"
+    "|${__arg_pattern__}\s*\[(\s*${__val_regex__}\s*)+\])"
     "\s*${__val_regex__}?\s*"
     '=>\s*([a-zA-Z][a-zA-Z0-9_]*)'
     "\s*${__val_regex__}?"
