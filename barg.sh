@@ -182,9 +182,9 @@ function barg::param_set {
   ! ${is_vec_list} && barg::var_exists "${set_var_name}" && return 0
 
   local check_valid_item=false
-  if [[ "${param_sign}" == *'}' ]]; then
-    local STR="${param_sign:1:-1}"
-    STR="${STR#*\{}"
+  if [ "${param_type}" == 'switch' ]; then
+    local STR="${__barg_additional_val[0]}"
+    __barg_additional_val=("${__barg_additional_val[@]:1}")
     while [[ "${STR}" =~ ${__obj_regex__} ]]; do
       local short="${BASH_REMATCH[2]}"
       local long="${BASH_REMATCH[3]}"
@@ -217,27 +217,27 @@ function barg::param_set {
       BARG_ARGV_TABLE["${set_var_name}"]="!"
       return
     done
-    ${is_required} && barg::exit_msg "Missing required arguments" "${param_type:+"{acc}${param_type}{r} "}switch is a required argument"
+    local name="${__barg_additional_names[0]}"
+    __barg_additional_names=("${__barg_additional_names[@]:1}")
+
+    ${is_required} && barg::exit_msg "Missing required arguments" "${param_type:+"{acc}${name}{r} "}switch is a required argument"
     declare -g "${set_var_name}=${def_value:-0}"
     return
   fi
 
-  local maybe_checked_list="${param_sign#*\ }" # :type | [...]
-  param_sign="${param_sign%%\ *}"              # short/long
-
-  if [[ "${maybe_checked_list:0:1}" == '[' ]]; then
+  if [[ "${param_type}" == 'set' ]]; then
     check_valid_item=true
-    param_type='str'
-    local STR="${maybe_checked_list:1:-1}"
+    param_type='str' # so to skip type validation
+    local STR="${__barg_additional_val[0]}"
+    __barg_additional_val=("${__barg_additional_val[@]:1}")
     local __valid_items__=()
     while [[ "${STR}" =~ ${__lst_regex__} ]]; do
       local value="${BASH_REMATCH[2]:-${BASH_REMATCH[4]}}"
       __valid_items__+=("${value}")
       STR="${STR/#"${BASH_REMATCH[0]}"/}"
     done
-    def_value="${__valid_items__[0]}"
   fi
-  unset maybe_checked_list STR
+  unset STR
 
   #shellcheck disable=2178
   local __short__=""
@@ -433,11 +433,13 @@ function barg::gen_help_message {
       optstr+="    ${long}"
     fi
 
-    if [[ -n "${type}" && "${type}" != "flag" && "${type}" != "switch" ]]; then
+    local stype="${type}"
+    [[ "${type}" == 'switch' || "${type}" == 'set' ]] && stype="*${name:-${stype}}"
+    if [[ "${type}" != "flag" && "${type}" != "switch" ]]; then
       if [ -n "${is_vec}" ]; then
-        type="[${type}]"
+        stype="[${stype}]"
       elif [ -n "${is_req}" ]; then
-        type="<${type}>"
+        stype="<${stype}>"
       fi
     fi
 
@@ -454,9 +456,7 @@ function barg::gen_help_message {
       desc="${desc} (${clacc}def\x1b[0m: ${default_str}\x1b[0m)"
     fi
 
-    [ "${type}" == "switch" ] && type="*${name}"
-
-    printf "%b%-24s\x1b[0m %b%11s\x1b[0m %b\x1b[0m\n" "${is_req:+${clreq}}" "${optstr}" "${clacc}" "${type:-*set}" "${desc}"
+    printf "%b%-24s\x1b[0m %b%11s\x1b[0m %b\x1b[0m\n" "${is_req:+${clreq}}" "${optstr}" "${clacc}" "${stype}" "${desc}"
   }
 
   printf '%bOptions\x1b[0m:\n' "${clacc}"
@@ -475,8 +475,7 @@ function barg::gen_help_message {
 
     short=""
     long=""
-    if [[ "${param}" != *'}' ]]; then
-      param="${param%%\ *}"
+    if [[ -n "${param}" ]]; then
       if [[ "${param}" == ?'/'* ]]; then
         short="-${param%/*}"
         long="--${param#*/}"
@@ -487,11 +486,11 @@ function barg::gen_help_message {
       continue
     fi
 
-    param="${param:1:-1}"
-    param="${param#*\{}"
-    name="${type}"
-    while [[ "${param}" =~ ${__obj_regex__} ]]; do
-      type="switch"
+    local switch_items="${__barg_additional_val[0]}"
+    name="${__barg_additional_names[0]}"
+    __barg_additional_val=("${__barg_additional_val[@]:1}")
+    __barg_additional_names=("${__barg_additional_names[@]:1}")
+    while [[ "${switch_items}" =~ ${__obj_regex__} ]]; do
       local short="${BASH_REMATCH[2]}"
       local long="${BASH_REMATCH[3]}"
       local value="${BASH_REMATCH[5]:-${BASH_REMATCH[7]}}"
@@ -508,8 +507,9 @@ function barg::gen_help_message {
       fi
 
       __print_flag_line
-      param="${param/#"${BASH_REMATCH[0]}"/}"
+      switch_items="${switch_items/#"${BASH_REMATCH[0]}"/}"
     done
+    name=""
   done
   param=""
   short="-h"
@@ -612,8 +612,7 @@ function barg::dynamic_completion {
 
     short=""
     long=""
-    if [[ "${param}" != *'}' ]]; then
-      param="${param%%\ *}"
+    if [[ -n "${param}" ]]; then
       if [[ "${param}" == ?'/'* ]]; then
         short="-${param%/*}"
         long="--${param#*/}"
@@ -621,19 +620,22 @@ function barg::dynamic_completion {
         (("${#param}" > 1)) && long="--${param}" || short="-${param}"
       fi
 
-      if [[ -z "${type}" && -n "${prev}" ]] && [[ "${prev}" == "${short}" || "${prev}" == "${long}" ]]; then
-        local maybe_checked_list="${params[i]#*\ }" # [...]
-        local STR="${maybe_checked_list:1:-1}"
-        declare -n item_labels="BARG_SET_LABELS_${vars[i]}"
-        local j=0
-        curr="${curr,,}"
-        while [[ "${STR}" =~ ${__lst_regex__} ]]; do
-          local value="${BASH_REMATCH[2]:-${BASH_REMATCH[4]}}"
-          [[ "${value,,}" == "${curr}"* || "${item_labels[j],,}" == "${curr}"* ]] && printf '%s\t3\t%11s %s\n' "${value}" "*set" "${item_labels[j]:-"value for ${prev}"}"
-          STR="${STR/#"${BASH_REMATCH[0]}"/}"
-          ((j++))
-        done
-        exit
+      if [ "${type}" == 'set' ]; then
+        local STR="${__barg_additional_val[0]}"
+        __barg_additional_val=("${__barg_additional_val[@]:1}")
+
+        if [[ -n "${prev}" ]] && [[ "${prev}" == "${short}" || "${prev}" == "${long}" ]]; then
+          declare -n item_labels="BARG_SET_LABELS_${vars[i]}"
+          local j=0
+          curr="${curr,,}"
+          while [[ "${STR}" =~ ${__lst_regex__} ]]; do
+            local value="${BASH_REMATCH[2]:-${BASH_REMATCH[4]}}"
+            [[ "${value,,}" == "${curr}"* || "${item_labels[j],,}" == "${curr}"* ]] && printf '%s\t3\t%11s %s\n' "${value}" "*set" "${item_labels[j]:-"value for ${prev}"}"
+            STR="${STR/#"${BASH_REMATCH[0]}"/}"
+            ((j++))
+          done
+          exit
+        fi
       fi
 
       for cur_arg in "${argv[@]:0:$((total_args - 1))}"; do
@@ -644,13 +646,13 @@ function barg::dynamic_completion {
       continue
     fi
 
-    param="${param:1:-1}"
-    param="${param#*\{}"
-    name="${type}"
     local lopt_count="${#long_opts[@]}"
     local sopt_count="${#short_opts[@]}"
-    while [[ "${param}" =~ ${__obj_regex__} ]]; do
-      type="switch"
+    local switch_items="${__barg_additional_val[0]}"
+    name="${__barg_additional_names[0]}"
+    __barg_additional_val=("${__barg_additional_val[@]:1}")
+    __barg_additional_names=("${__barg_additional_names[@]:1}")
+    while [[ "${switch_items}" =~ ${__obj_regex__} ]]; do
       local short="${BASH_REMATCH[2]}"
       local long="${BASH_REMATCH[3]}"
       local value="${BASH_REMATCH[5]:-${BASH_REMATCH[7]}}"
@@ -675,7 +677,7 @@ function barg::dynamic_completion {
       done
 
       __print_flag_line
-      param="${param/#"${BASH_REMATCH[0]}"/}"
+      switch_items="${switch_items/#"${BASH_REMATCH[0]}"/}"
     done
   done
 
@@ -739,7 +741,7 @@ function barg::parse {
   # shellcheck disable=SC1003
   local __str_regex__='("((\\"|[^"])*?)"|'\''((\\'\''|[^'\''])*?)'\'')'
   local __val_regex__='("((\\"|[^"])*?)"|'\''((\\'\''|[^'\''])*?)'\''|(-?[0-9]+|true|false))'
-  local __arg_pattern__='[A-Za-z!?@#_.:<>]?/?[A-Za-z0-9!?@#_.:<>\-]+'
+  local __arg_pattern__='[A-Za-z!?@#_.<>]?/?[A-Za-z0-9!?@#_.<>\-]+'
 
   # Int or float
   local __num_regex__='^((-?[0-9]{1,3}(_[0-9]{3})*|-?[0-9]*)|(-?[0-9]{1,3}(_[0-9]{3})+\.([0-9]{3}(_[0-9]{1,3})*|[0-9]{1,3})|-?[0-9]+\.[0-9]+))$'
@@ -747,14 +749,14 @@ function barg::parse {
   local __flt_regex__='^(-?[0-9]{1,3}(_[0-9]{3})+\.([0-9]{3}(_[0-9]{1,3})*|[0-9]{1,3})|-?[0-9]+\.[0-9]+)$'
   local __opt_regex__="meta \{((\s*([\*A-Za-z_][A-Za-z0-9_-]+)\s*:\s*${__val_regex__}\s*)+)\}"
   local __obi_regex__="\s*([\*A-Za-z_][A-Za-z0-9_-]+)\s*:\s*${__val_regex__}\s*"
-  local __obj_regex__="\s*(([A-Za-z!?@#_.:<>]/)?([A-Za-z0-9!?@#_.:<>\-]+)\s*:\s*${__val_regex__})\s*(h${__str_regex__})?"
+  local __obj_regex__="\s*(([A-Za-z!?@#_.<>]/)?([A-Za-z0-9!?@#_.<>\-]+)\s*:\s*${__val_regex__})\s*(h${__str_regex__})?"
   local __lst_regex__="\s*${__val_regex__}\s*"
   local __def_regex__=(
-    '\s*(@[a-zA-Z0-9\-_]*)?\s*(!)?\s*'
-    "(${__arg_pattern__}\s+:(str|float|int|num|flag)(s)?"
-    "|(\"((\\\\\"|[^\"])*?)\")?\s*\{(\s*${__arg_pattern__}\s*:\s*${__val_regex__}\s*(h\"((\\\"|[^\"])*?)\")?\s*)+\}"
-    "|${__arg_pattern__}\s*\[(\s*${__val_regex__}\s*)+\])"
-    "\s*${__val_regex__}?\s*"
+    '\s*(@[a-zA-Z0-9\-_]*)?\s*(!)?\s*('
+    "(${__arg_pattern__})\s?:(str|float|int|num|flag)(s)?"
+    "|(\"((\\\\\"|[^\"])*?)\")?\s*\{((\s*${__arg_pattern__}\s*:\s*${__val_regex__}\s*(h\"((\\\"|[^\"])*?)\")?\s*)+)\}"
+    "|(${__arg_pattern__})\s*\[((\s*${__val_regex__}\s*)+)\]"
+    ")\s*${__val_regex__}?\s*"
     '=>\s*([a-zA-Z][a-zA-Z0-9_]*)'
     "\s*${__val_regex__}?"
   )
@@ -882,6 +884,8 @@ function barg::parse {
   local -a __variables=()
   local -a __defaults=()
   local -a __descriptions=()
+  local -a __barg_additional_val=()
+  local -a __barg_additional_names=()
   local __last_valid_param_def=""
   while [[ "${STDIN_STR}" =~ ${__def_regex__} ]]; do
     STDIN_STR="${STDIN_STR/#"${BASH_REMATCH[0]}"/}"
@@ -899,18 +903,24 @@ function barg::parse {
     [[ -n "${flag_scope:1}" && "${flag_scope:1}" != "${BARG_SUBCOMMAND}" ]] && continue
 
     local param_is_req="${BASH_REMATCH[2]}"                                               # ?-> Is required
-    local param_pattern="${BASH_REMATCH[3]}"                                              # !-> Pattern
-    local param_type="${BASH_REMATCH[4]}"                                                 # ?-> Data type
-    local param_is_vec="${BASH_REMATCH[5]}"                                               # ?-> is a vec
-    local param_switch="${BASH_REMATCH[7]}"                                               # ?-> Switch name
-    local param_def_value="${BASH_REMATCH[27]:-${BASH_REMATCH[29]:-${BASH_REMATCH[31]}}}" # ?-> Default value
-    local param_var_name="${BASH_REMATCH[32]}"                                            # !-> Variable name
-    local param_help_desc="${BASH_REMATCH[34]:-${BASH_REMATCH[36]}}"                      # ?-> Def description
+    local param_pattern="${BASH_REMATCH[4]:-${BASH_REMATCH[21]}}"                         # !-> Pattern
+    local param_type="${BASH_REMATCH[5]}"                                                 # ?-> Data type
+    local param_is_vec="${BASH_REMATCH[6]}"                                               # ?-> is a vec
+    local param_switch="${BASH_REMATCH[8]}"                                               # ?-> Switch name
+    local param_def_value="${BASH_REMATCH[31]:-${BASH_REMATCH[33]:-${BASH_REMATCH[35]}}}" # ?-> Default value
+    local param_var_name="${BASH_REMATCH[36]}"                                            # !-> Variable name
+    local param_help_desc="${BASH_REMATCH[38]:-${BASH_REMATCH[40]}}"                      # ?-> Def description
 
     barg::is_in_arr "${param_var_name}" "${__ilegal_var_names__[@]}" && barg::exit_msg "Ilegal variable name" "{acc}${param_var_name}{r} is a reserved variable name."
 
+    [ -z "${param_type}" ] && {
+      param_type="${BASH_REMATCH[22]:+set}"
+      param_type="${param_type:-switch}"
+      [ "${param_type}" != "set" ] && __barg_additional_names=("${param_switch}")
+      __barg_additional_val+=("${BASH_REMATCH[11]:-${BASH_REMATCH[22]}}")
+    }
     __signatures+=("${param_pattern}")
-    __types+=("${param_type:-${param_switch}}")
+    __types+=("${param_type}")
     __variables+=("${param_var_name}")
     __defaults+=("${param_def_value}")
     __flags+=("${param_is_req}${param_is_vec}")
