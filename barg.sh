@@ -397,17 +397,23 @@ function barg::gen_help_message {
   local __all_subcommands=("${!__barg_subcommands[@]}")
   local scmd_str=""
   [[ "${#__all_subcommands[@]}" -gt 0 ]] && {
-    [[ -n "${BARG_SUBCOMMAND}" ]] && scmd_str=" ${BARG_SUBCOMMAND}" || scmd_str=" COMMAND"
+    [[ -n "${BARG_SUBCOMMAND}" ]] && scmd_str=" ${BARG_SUBCOMMAND}" || {
+      [ "${__barg_opts[subcommand_required]}" == true ] && scmd_str=" COMMAND" || scmd_str=" [COMMAND]"
+    }
   }
+  local __spare_args_indicator=""
   if [ -n "${BARG_SUBCOMMAND}" ]; then
     local desc="${__barg_subcommands["${BARG_SUBCOMMAND}"]:-${__barg_subcommands["*${BARG_SUBCOMMAND}"]}}"
     printf '\x1b[1m%b%s\x1b[0m%s\n\n' "${clacc}" "${prognam}" " ${BARG_SUBCOMMAND}${desc:+: ${desc}}"
-  elif [ -n "${__barg_opts[summary]}" ]; then
-    printf '\x1b[1m%b%s\x1b[0m: %s\n\n' "${clacc}" "${prognam}" "${__barg_opts[summary]}"
+    # [ -n "${__barg_subcommands["+${BARG_SUBCOMMAND}"]}" ] && __spare_args_indicator=' [...]'
+    [ -n "${__barg_subcommands["*${BARG_SUBCOMMAND}"]}" ] && __spare_args_indicator=' ...'
+  else
+    [ -n "${__barg_opts[summary]}" ] && printf '\x1b[1m%b%s\x1b[0m: %s\n\n' "${clacc}" "${prognam}" "${__barg_opts[summary]}"
+    [[ -n "${__barg_opts[spare_args_var]}" ]] && __spare_args_indicator=' [...]'
+    [[ "${__barg_opts[spare_args_required]}" == true ]] && __spare_args_indicator=' ...'
   fi
 
-  [[ "${__barg_opts[spare_args_required]}" == true || -n "${__barg_subcommands["*${BARG_SUBCOMMAND}"]}" ]] && local __dummy_bool_extras="-"
-  printf '%bUsage\x1b[0m:\n %b%s\x1b[0m%s [OPTIONS]%s\n\n' "${clacc}" "${clcmd}" "${prognam,,}" "${scmd_str}" "${__dummy_bool_extras:+ [...]}"
+  printf '%bUsage\x1b[0m:\n %b%s\x1b[0m%s [OPTIONS]%s\n\n' "${clacc}" "${clcmd}" "${prognam,,}" "${scmd_str}" "${__spare_args_indicator}"
 
   if [ -z "${BARG_SUBCOMMAND}" ] && [[ "${#__all_subcommands[@]}" -gt 0 ]]; then
     printf "%bAvailable subcommands\x1b[0m:\n" "${clacc}"
