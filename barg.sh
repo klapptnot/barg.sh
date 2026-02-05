@@ -81,7 +81,8 @@ function barg::nucompletion_adapter {
     desc="${desc:1:-1}"
     desc="${desc//\'\\\'\'/\'}"
     desc="${desc//\"/\\\"}"
-    printf -v s '{"value":"%s ", "display": "%s", "description": "%s", "style": {"fg": "%s"}}' "${value}" "${value}" "${desc}" "${colors[color]}"
+    printf -v s '{"value":"%s ", "display": "%s", "description": "%s", "style": {"fg": "%s"}}' \
+      "${value}" "${value}" "${desc}" "${colors[color]}"
     res+=("${s}")
   done
   IFS=',' s="${res[*]}"
@@ -107,7 +108,12 @@ function barg::normalize_args {
   while ((i < ${#argv[@]})); do
     [[ "${argv[i]}" == '--' ]] && ((i = i + 2)) && continue
     # is flag-like, and is short or long, single char will get removed if not here
-    if [[ "${argv[i]}" != -* ]] || [ "${#argv[i]}" -eq 2 ] || [[ "${argv[i]}" == --* ]] || [[ "${argv[i]}" == '-' ]]; then
+    if
+      [[ "${argv[i]}" != -* ]] \
+        || [ "${#argv[i]}" -eq 2 ] \
+        || [[ "${argv[i]}" == --* ]] \
+        || [[ "${argv[i]}" == '-' ]]
+    then
       ((i++))
       continue
     fi
@@ -161,7 +167,8 @@ function barg::validate_numeric {
 
   if ! [[ "${value}" =~ ${regex} ]]; then
     if [[ "${value}" =~ ^[_\.0-9]*$ ]]; then
-      barg::exit_msg "Unknown format" "Invalid numerical value, expected a {acc}${type_name}{r} ({any}${value}{r})"
+      barg::exit_msg "Unknown format" \
+        "Invalid numerical value, expected a {acc}${type_name}{r} ({any}${value}{r})"
     fi
     barg::exit_msg "Type mismatch" "Expected {acc}${type_name}{r}, got string ({any}${value}{r})"
   fi
@@ -184,6 +191,7 @@ function barg::param_set {
   local check_valid_item=false
   if [ "${param_type}" == 'switch' ]; then
     local STR="${__barg_additional_val[0]}"
+    local the_found_flag=""
     __barg_additional_val=("${__barg_additional_val[@]:1}")
     while [[ "${STR}" =~ ${__obj_regex__} ]]; do
       local short="${BASH_REMATCH[2]}"
@@ -203,24 +211,26 @@ function barg::param_set {
       if barg::is_in_arr "${short}" "${!BARG_ARGV_TABLE[@]}"; then
         declare -g "${set_var_name}=${value}"
         BARG_TAKEN_ARGS+=("$((${BARG_ARGV_TABLE["${short}"]} - 1))")
-        unset "BARG_ARGV_TABLE[${short}]"
+        the_found_flag="${short}"
       elif barg::is_in_arr "${long}" "${!BARG_ARGV_TABLE[@]}"; then
         declare -g "${set_var_name}=${value}"
         BARG_TAKEN_ARGS+=("$((${BARG_ARGV_TABLE["${long}"]} - 1))")
-        unset "BARG_ARGV_TABLE[${long}]"
+        the_found_flag="${long}"
       else
         STR="${STR/#"${BASH_REMATCH[0]}"/}"
         continue
       fi
 
       # already set + not needed to continue
-      BARG_ARGV_TABLE["${set_var_name}"]="!"
+      BARG_ARGV_TABLE["${set_var_name}"]="${the_found_flag}"
+      unset "BARG_ARGV_TABLE[${the_found_flag}]"
       return
     done
     local name="${__barg_additional_names[0]}"
     __barg_additional_names=("${__barg_additional_names[@]:1}")
 
-    ${is_required} && barg::exit_msg "Missing required arguments" "${param_type:+"{acc}${name}{r} "}switch is a required argument"
+    ${is_required} && barg::exit_msg "Missing required arguments" \
+      "${param_type:+"{acc}${name}{r} "}switch is a required argument"
     declare -g "${set_var_name}=${def_value:-0}"
     return
   fi
@@ -293,7 +303,9 @@ function barg::param_set {
         ;;
       *)
         if [[ "${value}" == -* ]]; then
-          [ "${value}" != '--' ] && barg::exit_msg "Param-like value" "Value for {acc}${the_found_flag}{r} looks like an option/flag. Use {str}'-- ${value}'{r} to bypass"
+          [ "${value}" != '--' ] && barg::exit_msg \
+            "Param-like value" \
+            "Value for {acc}${the_found_flag}{r} looks like an option/flag. Use {str}'-- ${value}'{r} to bypass"
           value="${argv[current_value_index + 1]}"
           BARG_TAKEN_ARGS+=("$((current_value_index + 1))")
         fi
@@ -312,7 +324,8 @@ function barg::param_set {
       local value="${argv[index]}"
       [ -z "${value}" ] && continue
       if [[ "${value}" == -* ]]; then
-        [ "${value}" != '--' ] && barg::exit_msg "Param-like value" "Value for {acc}${argv[index - 1]}{r} looks like an option/flag. Use {str}'-- ${argv[index]}{r} to bypass"
+        [ "${value}" != '--' ] && barg::exit_msg "Param-like value" \
+          "Value for {acc}${argv[index - 1]}{r} looks like an option/flag. Use {str}'-- ${argv[index]}{r} to bypass"
         value="${argv[index + 1]}"
         BARG_TAKEN_ARGS+=("$((index + 1))")
       fi
@@ -330,7 +343,8 @@ function barg::param_set {
 
   unset "BARG_ARGV_TABLE[${the_found_flag}]"
 
-  ! barg::var_exists "${set_var_name}" && ${is_required} && barg::exit_msg "Missing required arguments" "${signat} is a required argument"
+  ! barg::var_exists "${set_var_name}" && ${is_required} && barg::exit_msg \
+    "Missing required arguments" "${signat} is a required argument"
 
   [ "${__barg_opts[allow_empty_values]}" != 'true' ] \
     && ${is_required} \
@@ -408,12 +422,14 @@ function barg::gen_help_message {
     # [ -n "${__barg_subcommands["+${BARG_SUBCOMMAND}"]}" ] && __spare_args_indicator=' [...]'
     [ -n "${__barg_subcommands["*${BARG_SUBCOMMAND}"]}" ] && __spare_args_indicator=' ...'
   else
-    [ -n "${__barg_opts[summary]}" ] && printf '\x1b[1m%b%s\x1b[0m: %s\n\n' "${clacc}" "${prognam}" "${__barg_opts[summary]}"
+    [ -n "${__barg_opts[summary]}" ] && printf '\x1b[1m%b%s\x1b[0m: %s\n\n' \
+      "${clacc}" "${prognam}" "${__barg_opts[summary]}"
     [[ -n "${__barg_opts[spare_args_var]}" ]] && __spare_args_indicator=' [...]'
     [[ "${__barg_opts[spare_args_required]}" == true ]] && __spare_args_indicator=' ...'
   fi
 
-  printf '%bUsage\x1b[0m:\n %b%s\x1b[0m%s [OPTIONS]%s\n\n' "${clacc}" "${clcmd}" "${prognam,,}" "${scmd_str}" "${__spare_args_indicator}"
+  printf '%bUsage\x1b[0m:\n %b%s\x1b[0m%s [OPTIONS]%s\n\n' \
+    "${clacc}" "${clcmd}" "${prognam,,}" "${scmd_str}" "${__spare_args_indicator}"
 
   if [ -z "${BARG_SUBCOMMAND}" ] && [[ "${#__all_subcommands[@]}" -gt 0 ]]; then
     printf "%bAvailable subcommands\x1b[0m:\n" "${clacc}"
@@ -456,7 +472,8 @@ function barg::gen_help_message {
       desc="${desc} (${clacc}def\x1b[0m: ${default_str}\x1b[0m)"
     fi
 
-    printf "%b%-24s\x1b[0m %b%11s\x1b[0m %b\x1b[0m\n" "${is_req:+${clreq}}" "${optstr}" "${clacc}" "${stype}" "${desc}"
+    printf "%b%-24s\x1b[0m %b%11s\x1b[0m %b\x1b[0m\n" \
+      "${is_req:+${clreq}}" "${optstr}" "${clacc}" "${stype}" "${desc}"
   }
 
   printf '%bOptions\x1b[0m:\n' "${clacc}"
@@ -630,7 +647,8 @@ function barg::dynamic_completion {
           curr="${curr,,}"
           while [[ "${STR}" =~ ${__lst_regex__} ]]; do
             local value="${BASH_REMATCH[2]:-${BASH_REMATCH[4]}}"
-            [[ "${value,,}" == "${curr}"* || "${item_labels[j],,}" == "${curr}"* ]] && printf '%s\t3\t%11s %s\n' "${value}" "*set" "${item_labels[j]:-"value for ${prev}"}"
+            [[ "${value,,}" == "${curr}"* || "${item_labels[j],,}" == "${curr}"* ]] \
+              && printf '%s\t3\t%11s %s\n' "${value}" "*set" "${item_labels[j]:-"value for ${prev}"}"
             STR="${STR/#"${BASH_REMATCH[0]}"/}"
             ((j++))
           done
@@ -845,7 +863,11 @@ function barg::parse {
     fi
   fi
   local __missing_subcmd=false
-  if [ "${__barg_opts[subcommand_required]}" == "true" ] && [ -n "${__barg_subcommands[*]}" ] && [ -z "${BARG_SUBCOMMAND}" ]; then
+  if
+    [ "${__barg_opts[subcommand_required]}" == "true" ] \
+      && [ -n "${__barg_subcommands[*]}" ] \
+      && [ -z "${BARG_SUBCOMMAND}" ]
+  then
     __missing_subcmd=true
   fi
 
@@ -911,7 +933,8 @@ function barg::parse {
     local param_var_name="${BASH_REMATCH[36]}"                                            # !-> Variable name
     local param_help_desc="${BASH_REMATCH[38]:-${BASH_REMATCH[40]}}"                      # ?-> Def description
 
-    barg::is_in_arr "${param_var_name}" "${__ilegal_var_names__[@]}" && barg::exit_msg "Ilegal variable name" "{acc}${param_var_name}{r} is a reserved variable name."
+    barg::is_in_arr "${param_var_name}" "${__ilegal_var_names__[@]}" \
+      && barg::exit_msg "Ilegal variable name" "{acc}${param_var_name}{r} is a reserved variable name."
 
     [ -z "${param_type}" ] && {
       param_type="${BASH_REMATCH[22]:+set}"
@@ -1008,7 +1031,8 @@ function barg::parse {
 
   local count="${#__variables[@]}"
   for ((i = 0; i < count; i++)); do
-    barg::param_set "${__signatures[i]}" "${__variables[i]}" "${__defaults[i]}" "${__types[i]}" "${__flags[i]}"
+    barg::param_set "${__signatures[i]}" "${__variables[i]}" \
+      "${__defaults[i]}" "${__types[i]}" "${__flags[i]}"
   done
 
   local extras_count=0
