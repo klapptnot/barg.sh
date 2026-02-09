@@ -561,7 +561,7 @@ function barg::dynamic_completion {
   local total_args="${#argv[@]}"
   ((total_args > 0)) && curr="${argv[-1]}"
   local __all_subcommands=("${!__barg_subcommands[@]}")
-  if ((${#__all_subcommands[@]} > 0 && total_args == 1)); then
+  if ((${#__all_subcommands[@]} > 0 && total_args <= 1)); then
     compgen -V subcmds -W "${__all_subcommands[*]/#\*/}" -- "${curr}"
 
     for c in "${subcmds[@]}"; do
@@ -577,6 +577,7 @@ function barg::dynamic_completion {
       return
     }
   fi
+  [[ "${__barg_opts[subcommand_required]}" == 'true' && -z "${BARG_SUBCOMMAND}" ]] && return
 
   [[ "${#params[@]}" == 0 ]] && return
   local show_def_hint=false
