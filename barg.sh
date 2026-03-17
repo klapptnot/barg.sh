@@ -766,8 +766,8 @@ function barg::parse {
   local __num_regex__='^((-?[0-9]{1,3}(_[0-9]{3})*|-?[0-9]*)|(-?[0-9]{1,3}(_[0-9]{3})+\.([0-9]{3}(_[0-9]{1,3})*|[0-9]{1,3})|-?[0-9]+\.[0-9]+))$'
   local __int_regex__='^(-?[0-9]{1,3}(_[0-9]{3})*|-?[0-9]*)$'
   local __flt_regex__='^(-?[0-9]{1,3}(_[0-9]{3})+\.([0-9]{3}(_[0-9]{1,3})*|[0-9]{1,3})|-?[0-9]+\.[0-9]+)$'
-  local __opt_regex__="meta \{((\s*([\*A-Za-z_][A-Za-z0-9_-]+)\s*:\s*${__val_regex__}\s*)+)\}"
-  local __obi_regex__="\s*([\*A-Za-z_][A-Za-z0-9_-]+)\s*:\s*${__val_regex__}\s*"
+  local __opt_regex__="meta \{((\s*([\*A-Za-z_][A-Za-z0-9_-]*)\s*:\s*${__val_regex__}\s*)+)\}"
+  local __obi_regex__="\s*([\*A-Za-z_][A-Za-z0-9_-]*)\s*:\s*${__val_regex__}\s*"
   local __obj_regex__="\s*(([A-Za-z!?@#_.<>]/)?([A-Za-z0-9!?@#_.<>\-]+)\s*:\s*${__val_regex__})\s*(h${__str_regex__})?"
   local __lst_regex__="\s*${__val_regex__}\s*"
   local __def_regex__=(
