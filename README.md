@@ -381,7 +381,7 @@ The `meta` block configures global behavior:
 
 ### Argument Handling
 
-- **spare_args_var**: Variable name for positional/spare arguments (default: `BARG_SPARE_ARGS`)
+- **spare_args_var**: Variable name for positional/spare arguments (default: `""`)
   - Example: `spare_args_var: "FILES"`
   - Also creates `${spare_args_var}_COUNT` with the count
 
@@ -411,12 +411,6 @@ The `meta` block configures global behavior:
 
 - **use_stderr**: Use stderr for output/errors (default: `true`)
   - Example: `use_stderr: false`
-
-### Customization
-
-- **color_palette**: Color scheme, use `:` to disable (default: empty)
-  - Example: `color_palette: "38;5;9:38;5;50:38;5;230:38;5;203:38;5;85:38;5;230"`
-  - Format: `acc:cmd:req:err:str:any` (6 ANSI codes)
 
 - **on_error**: Function name to call on error (default: `""`)
   - Example: `on_error: "on_args_err"`
@@ -448,12 +442,12 @@ BARG
 
 ## Color Customization
 
-Set globally via the `BARG_COLOR_PALETTE` env var, or per-script via `color_palette` in `meta` (takes priority).
+Set globally via the `BARG_COLOR_PALETTE` env var, or per-script override.
 
 ```bash
-meta {
-  color_palette: '38;5;9:38;5;50:38;5;122:38;5;203:38;5;85:38;5;230'
-}
+BARG_COLOR_PALETTE='38;5;9:38;5;50:38;5;122:38;5;203:38;5;85:38;5;230' barg::parse "${@}" << BARG
+# ...
+BARG
 ```
 
 Color slots (in order):
@@ -465,7 +459,7 @@ Color slots (in order):
 5. `str` — String default values
 6. `any` — Other default values (numbers, booleans)
 
-To disable colors completely: `palette: ":"`
+To disable colors completely, use an empty string.
 
 ## Performance
 
@@ -677,8 +671,8 @@ After parsing, `barg` sets:
 - **`BARG_ARGV_TABLE`**: Tracks which variables were explicitly set via CLI
   - `BARG_ARGV_TABLE[VAR_NAME]` is `"!"` if the user provided the value
   - Empty if the value came from a barg default
-- **`${spare_args_var}`**: Array of positional arguments (default name: `BARG_SPARE_ARGS`)
-- **`${spare_args_var}_COUNT`**: Count of positional arguments
+- **`${spare_args_var}`**: Array of positional arguments (if available)
+- **`${spare_args_var}_COUNT`**: Count of positional arguments (if available)
 - All variables defined via `=> VAR_NAME`
 
 #### Priority System (CLI > Config > Default)

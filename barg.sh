@@ -22,7 +22,6 @@ fi
 declare -Ag __barg_opts=(
   [argv_zero]="${0##*/}"      # Program name (from $0)
   [summary]=''                # Short tool description
-  [color_palette]=''          # Error message color profile
   [on_error]=''               # Function to call on failure
   [epilog_lines]=''           # Array name for footer/examples
   [spare_args_var]=''         # Variable name to store leftovers
@@ -306,7 +305,7 @@ function barg::param_set {
           [ "${value}" != '--' ] && barg::exit_msg \
             "Param-like value" \
             "Value for {acc}${the_found_flag}{r} looks like an option/flag. Use {str}'-- ${value}'{r} to bypass"
-          value="${argv[current_value_index + 1]}"
+          value="${argv[current_value_index+1]}"
           BARG_TAKEN_ARGS+=("$((current_value_index + 1))")
         fi
         if [ "${param_type}" == 'str' ]; then
@@ -325,8 +324,8 @@ function barg::param_set {
       [ -z "${value}" ] && continue
       if [[ "${value}" == -* ]]; then
         [ "${value}" != '--' ] && barg::exit_msg "Param-like value" \
-          "Value for {acc}${argv[index - 1]}{r} looks like an option/flag. Use {str}'-- ${argv[index]}{r} to bypass"
-        value="${argv[index + 1]}"
+          "Value for {acc}${argv[index-1]}{r} looks like an option/flag. Use {str}'-- ${argv[index]}{r} to bypass"
+        value="${argv[index+1]}"
         BARG_TAKEN_ARGS+=("$((index + 1))")
       fi
       if [ "${param_type}" == 'str' ]; then
@@ -417,10 +416,10 @@ function barg::gen_help_message {
   }
   local __spare_args_indicator=""
   if [ -n "${BARG_SUBCOMMAND}" ]; then
-    local desc="${__barg_subcommands["${BARG_SUBCOMMAND}"]:-${__barg_subcommands["*${BARG_SUBCOMMAND}"]}}"
+    local desc="${__barg_subcommands["${BARG_SUBCOMMAND}"]:-${__barg_subcommands["*${BARG_SUBCOMMAND}"]:-${__barg_subcommands["+${BARG_SUBCOMMAND}"]}}}"
+    [ -n "${__barg_subcommands["*${BARG_SUBCOMMAND}"]}" ] && __spare_args_indicator=' [...]'
+    [ -n "${__barg_subcommands["+${BARG_SUBCOMMAND}"]}" ] && __spare_args_indicator=' ...'
     printf '\x1b[1m%b%s\x1b[0m%s\n\n' "${clacc}" "${prognam}" " ${BARG_SUBCOMMAND}${desc:+: ${desc}}"
-    # [ -n "${__barg_subcommands["+${BARG_SUBCOMMAND}"]}" ] && __spare_args_indicator=' [...]'
-    [ -n "${__barg_subcommands["*${BARG_SUBCOMMAND}"]}" ] && __spare_args_indicator=' ...'
   else
     [ -n "${__barg_opts[summary]}" ] && printf '\x1b[1m%b%s\x1b[0m: %s\n\n' \
       "${clacc}" "${prognam}" "${__barg_opts[summary]}"
@@ -434,7 +433,7 @@ function barg::gen_help_message {
   if [ -z "${BARG_SUBCOMMAND}" ] && [[ "${#__all_subcommands[@]}" -gt 0 ]]; then
     printf "%bAvailable subcommands\x1b[0m:\n" "${clacc}"
     for sub in "${__all_subcommands[@]}"; do
-      printf "  %-16s %s\n" "${sub#\*}" "${__barg_subcommands["${sub}"]}"
+      printf "  %-16s %s\n" "${sub#[*+]}" "${__barg_subcommands["${sub}"]}"
     done
     printf '\n'
   fi
@@ -562,10 +561,10 @@ function barg::dynamic_completion {
   ((total_args > 0)) && curr="${argv[-1]}"
   local __all_subcommands=("${!__barg_subcommands[@]}")
   if ((${#__all_subcommands[@]} > 0 && total_args <= 1)); then
-    compgen -V subcmds -W "${__all_subcommands[*]/#\*/}" -- "${curr}"
+    compgen -V subcmds -W "${__all_subcommands[*]#[*+]}" -- "${curr}"
 
     for c in "${subcmds[@]}"; do
-      printf '%s\t0\t%s\n' "${c}" "${__barg_subcommands["${c}"]:-${__barg_subcommands["*${c}"]}}"
+      printf '%s\t0\t%s\n' "${c}" "${__barg_subcommands["${c}"]:-${__barg_subcommands["*${c}"]:-${__barg_subcommands["+${c}"]}}}"
     done
 
     [ "${__barg_opts[subcommand_required]}" == 'true' ] && {
@@ -766,13 +765,13 @@ function barg::parse {
   local __num_regex__='^((-?[0-9]{1,3}(_[0-9]{3})*|-?[0-9]*)|(-?[0-9]{1,3}(_[0-9]{3})+\.([0-9]{3}(_[0-9]{1,3})*|[0-9]{1,3})|-?[0-9]+\.[0-9]+))$'
   local __int_regex__='^(-?[0-9]{1,3}(_[0-9]{3})*|-?[0-9]*)$'
   local __flt_regex__='^(-?[0-9]{1,3}(_[0-9]{3})+\.([0-9]{3}(_[0-9]{1,3})*|[0-9]{1,3})|-?[0-9]+\.[0-9]+)$'
-  local __opt_regex__="meta \{((\s*([\*A-Za-z_][A-Za-z0-9_-]*)\s*:\s*${__val_regex__}\s*)+)\}"
-  local __obi_regex__="\s*([\*A-Za-z_][A-Za-z0-9_-]*)\s*:\s*${__val_regex__}\s*"
+  local __opt_regex__="meta \{((\s*([*+]?[A-Za-z_][A-Za-z0-9_-]*)\s*:\s*${__val_regex__}\s*)+)\}"
+  local __obi_regex__="\s*([*+]?[A-Za-z_][A-Za-z0-9_-]*)\s*:\s*${__val_regex__}\s*"
   local __obj_regex__="\s*(([A-Za-z!?@#_.<>]/)?([A-Za-z0-9!?@#_.<>\-]+)\s*:\s*${__val_regex__})\s*(h${__str_regex__})?"
   local __lst_regex__="\s*${__val_regex__}\s*"
   local __def_regex__=(
     '\s*(@[a-zA-Z0-9\-_]*)?\s*(!)?\s*('
-    "(${__arg_pattern__})\s?:(str|float|int|num|flag)(s)?"
+    "(${__arg_pattern__})\s*:(str|float|int|num|flag)(s)?"
     "|(\"((\\\\\"|[^\"])*?)\")?\s*\{((\s*${__arg_pattern__}\s*:\s*${__val_regex__}\s*(h\"((\\\"|[^\"])*?)\")?\s*)+)\}"
     "|(${__arg_pattern__})\s*\[((\s*${__val_regex__}\s*)+)\]"
     ")\s*${__val_regex__}?\s*"
@@ -795,6 +794,17 @@ function barg::parse {
     [[ "${line#*"${line%%[![:space:]]*}"}" == '#'* ]] && continue
     STDIN_STR+="${line}"$'\n'
   done
+
+  [ -n "${BARG_COLOR_PALETTE}" ] && {
+    mapfile -t palette <<< "${BARG_COLOR_PALETTE//:/$'\n'}"
+    __barg_palette[acc]="\x1b[${palette[0]:-0}m"
+    __barg_palette[cmd]="\x1b[${palette[1]:-0}m"
+    __barg_palette[req]="\x1b[${palette[2]:-0}m"
+    __barg_palette[err]="\x1b[${palette[3]:-0}m"
+    __barg_palette[str]="\x1b[${palette[4]:-0}m"
+    __barg_palette[any]="\x1b[${palette[5]:-0}m"
+  }
+  unset palette
 
   if [[ "${STDIN_STR}" =~ ${__opt_regex__} ]]; then
     local obj="${BASH_REMATCH[1]}"
@@ -824,18 +834,6 @@ function barg::parse {
     unset key val obj
   fi
 
-  local palette="${__barg_opts[color_palette]:-${BARG_COLOR_PALETTE}}"
-  [ -n "${palette}" ] && {
-    mapfile -t palette <<< "${palette//:/$'\n'}"
-    __barg_palette[acc]="\x1b[${palette[0]:-0}m"
-    __barg_palette[cmd]="\x1b[${palette[1]:-0}m"
-    __barg_palette[req]="\x1b[${palette[2]:-0}m"
-    __barg_palette[err]="\x1b[${palette[3]:-0}m"
-    __barg_palette[str]="\x1b[${palette[4]:-0}m"
-    __barg_palette[any]="\x1b[${palette[5]:-0}m"
-  }
-  unset palette
-
   local help_or_completion=false
   local completion_mode=''
   if [ "${__barg_opts[completion_enabled]}" == 'true' ]; then
@@ -847,18 +845,13 @@ function barg::parse {
   fi
 
   declare -g BARG_SUBCOMMAND=""
-  local BARG_SUBCOMMAND_NEEDS_SPARE=false
   # Try to get the possible sub command
   if [ "${1}" == '--' ]; then
     [ -z "${completion_mode}" ] && shift 1
   elif [ -n "${__barg_subcommands[*]}" ]; then
     # shellcheck disable=SC2206
     local __all_subcommands=("${!__barg_subcommands[@]}")
-    if barg::is_in_arr "${1}" "${__all_subcommands[@]/#\*/}"; then
-      # check if it does not need extras
-      [[ " ${__all_subcommands[*]} " == *" *${1} "* ]] && {
-        BARG_SUBCOMMAND_NEEDS_SPARE=true
-      }
+    if barg::is_in_arr "${1}" "${__all_subcommands[@]#[*+]}"; then
       BARG_SUBCOMMAND="${1}"
       [ -z "${completion_mode}" ] && shift 1
     fi
@@ -895,7 +888,7 @@ function barg::parse {
     local __all_subcommands=("${!__barg_subcommands[@]}")
     local lines=()
     for sub in "${__all_subcommands[@]}"; do
-      lines+=("${sub#\*}" "${__barg_subcommands["${sub}"]}")
+      lines+=("${sub#[*+]}" "${__barg_subcommands["${sub}"]}")
     done
     printf -v plines "  - {acc}%-16s{r} %s\n" "${lines[@]}"
     barg::exit_msg "Missing subcommand" "A subcommand is required, one of:\n${plines:0:-1}"
@@ -1036,34 +1029,32 @@ function barg::parse {
       "${__defaults[i]}" "${__types[i]}" "${__flags[i]}"
   done
 
-  local extras_count=0
-  local extras_var_name="${__barg_opts[spare_args_var]:-BARG_SPARE_ARGS}"
-  local i=0
-  declare -ag "${extras_var_name}"
-  for ((i = 0; i < ${#argv[@]}; i++)); do
-    # options and flags are taken, so skip them
-    [[ " ${BARG_TAKEN_ARGS[*]} " == *"${i}"* ]] && continue
+  local extras_var_name="${__barg_opts[spare_args_var]}"
+  if [ -n "${extras_var_name}" ]; then
+    local extras_count=0
+    local i=0
+    declare -ag "${extras_var_name}"
+    for ((i = 0; i < ${#argv[@]}; i++)); do
+      # options and flags are taken, so skip them
+      [[ " ${BARG_TAKEN_ARGS[*]} " == *"${i}"* ]] && continue
 
-    local arg="${argv[i]}"
-    if [[ "${arg}" == '--' ]]; then
-      ((i++))
-      arg="${argv[i]}"
-    elif [[ "${arg}" == -* ]]; then
-      barg::exit_msg "Unknown flag" "Flag {acc}${arg}{r} is not recognized"
-    fi
-
-    declare -ag "${extras_var_name}+=(\"${arg//\"/\\\"}\")"
-    ((extras_count++))
-  done
+      local arg="${argv[i]}"
+      declare -ag "${extras_var_name}+=(\"${arg//\"/\\\"}\")"
+      ((extras_count++))
+    done
+    declare -g "${extras_var_name}_COUNT"="${extras_count}"
+  else
+    for ((i = 0; i < ${#argv[@]}; i++)); do
+      [[ " ${BARG_TAKEN_ARGS[*]} " == *"${i}"* ]] && continue
+      barg::exit_msg "Unknown flag" "Parameter {acc}${argv[i]}{r} is not recognized"
+    done
+  fi
   unset BARG_TAKEN_ARGS
-
-  # shellcheck disable=SC2034
-  declare -g "${extras_var_name}_COUNT"="${extras_count}"
 
   if ((extras_count < 1)); then
     if [[ -z "${BARG_SUBCOMMAND}" && "${__barg_opts[spare_args_required]}" == 'true' ]]; then
       barg::exit_msg "Missing arguments" "spare arguments are required"
-    elif [[ -n "${BARG_SUBCOMMAND}" && "${BARG_SUBCOMMAND_NEEDS_SPARE}" == 'true' ]]; then
+    elif [[ -n "${BARG_SUBCOMMAND}" && -n "${__barg_subcommands[+${BARG_SUBCOMMAND}]}" ]]; then
       barg::exit_msg "Missing arguments" "subcommand {acc}${BARG_SUBCOMMAND}{r} requires spare arguments"
     fi
   fi
